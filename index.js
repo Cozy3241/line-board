@@ -1,15 +1,16 @@
 const express = require('express');
+const path = require('path');
 const app = express();
-// 修正前：const port = 3000;
-const port = process.env.PORT || 3000; // サーバーが指定するポート、なければ3000
+const port = process.env.PORT || 3000;
 
+// publicというフォルダの中身を公開するように設定
+app.use(express.static('public'));
 
-// ブラウザでアクセスした時に表示される内容
+// 起動時に一番最初に表示するページ
 app.get('/', (req, res) => {
-  res.send('<h1>社内掲示板システム</h1><p>現在開発中です！</p>');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// サーバーを起動する
 app.listen(port, () => {
-  console.log(`サーバーが起動しました：http://localhost:${port}`);
+  console.log(`サーバー起動：http://localhost:${port}`);
 });
