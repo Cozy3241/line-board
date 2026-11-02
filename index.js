@@ -23,7 +23,6 @@ async function initDB() {
             )
         `);
 
-        // ★追加：論理削除フラグ（is_deleted）列を安全に追加
         await pool.query(`
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false
         `);
@@ -71,6 +70,11 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// ★追加：スマホに環境変数のLIFF IDを安全に渡す窓口
+app.get('/api/config', (req, res) => {
+    res.json({ liffId: process.env.LIFF_ID });
+});
+
 // ユーザー名簿の更新と管理者判定
 app.post('/api/sync_user', async (req, res) => {
     const { line_user_id, name } = req.body;
@@ -93,10 +97,9 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// お知らせ一覧（★ is_deleted = false のものだけを取得！）
+// お知らせ一覧（論理削除されていないもののみ）
 app.get('/api/posts', async (req, res) => {
     try {
-        // ★論理削除されていない投稿だけを引っ張ってくる！
         const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
         const posts = postsRes.rows;
 
@@ -320,7 +323,7 @@ app.post('/api/posts', async (req, res) => {
     }
 });
 
-// ★論理削除：物理的に消さず、is_deleted フラグを true に更新するだけ！
+// 論理削除
 app.post('/api/posts/delete', async (req, res) => {
     const { post_id, line_user_id } = req.body;
 
@@ -331,10 +334,7 @@ app.post('/api/posts/delete', async (req, res) => {
             return res.status(403).json({ error: '削除権限がありません（管理者のみ可能です）' });
         }
 
-        // データを消さず、フラグだけを更新！関連する既読ログやコメントも完全に無傷で残ります
         await pool.query("UPDATE posts SET is_deleted = true WHERE id = $1", [post_id]);
-
-        console.log(`No.${post_id} を論理削除（非表示）にしました`);
         res.json({ success: true });
     } catch (err) {
         console.error('削除エラー:', err);

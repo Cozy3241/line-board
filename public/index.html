@@ -57,7 +57,6 @@
         .post-body { margin: 10px 0 0 0; color: #666; font-size: 0.95rem; white-space: pre-wrap; }
         .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
         
-        /* 削除ボタンのデザイン */
         .delete-btn {
             background: #fee2e2;
             border: 1px solid #fca5a5;
@@ -134,34 +133,49 @@
         let isCurrentUserAdmin = false;
 
         async function main() {
-            await liff.init({ liffId: "2010518553-09VESXxS" }); // ※ID入れてください！
+            try {
+                // ★完全自動化：サーバーから環境変数のLIFF IDを自動で取ってくる！
+                const configRes = await fetch('/api/config');
+                const config = await configRes.json();
 
-            if (!liff.isLoggedIn()) {
-                liff.login();
-            } else {
-                const profile = await liff.getProfile();
-                document.getElementById('name').innerText = profile.displayName;
-                myLineUserId = profile.userId;
-
-                const syncRes = await fetch('/api/sync_user', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ line_user_id: profile.userId, name: profile.displayName })
-                });
-                const syncData = await syncRes.json();
-
-                isCurrentUserAdmin = syncData.isAdmin; // 管理者フラグをセット
-
-                if (isCurrentUserAdmin) {
-                    document.getElementById('admin-badge').style.display = 'inline';
-                    document.getElementById('admin-form').style.display = 'block';
+                if (!config.liffId) {
+                    alert('LIFF IDが設定されていません。Renderの環境変数（LIFF_ID）を確認してください。');
+                    return;
                 }
 
-                document.getElementById('loader').style.display = 'none';
-                document.getElementById('content').style.display = 'block';
+                // 取得したIDで自動初期化！
+                await liff.init({ liffId: config.liffId });
 
-                await loadPosts();
-                checkAndScrollToTarget();
+                if (!liff.isLoggedIn()) {
+                    liff.login();
+                } else {
+                    const profile = await liff.getProfile();
+                    document.getElementById('name').innerText = profile.displayName;
+                    myLineUserId = profile.userId;
+
+                    const syncRes = await fetch('/api/sync_user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ line_user_id: profile.userId, name: profile.displayName })
+                    });
+                    const syncData = await syncRes.json();
+
+                    isCurrentUserAdmin = syncData.isAdmin;
+
+                    if (isCurrentUserAdmin) {
+                        document.getElementById('admin-badge').style.display = 'inline';
+                        document.getElementById('admin-form').style.display = 'block';
+                    }
+
+                    document.getElementById('loader').style.display = 'none';
+                    document.getElementById('content').style.display = 'block';
+
+                    await loadPosts();
+                    checkAndScrollToTarget();
+                }
+            } catch (err) {
+                console.error('初期化エラー:', err);
+                alert('アプリの起動に失敗しました。');
             }
         }
 
@@ -212,7 +226,6 @@
                         `).join('');
                     }
 
-                    // 管理者なら削除ボタンを出す
                     const deleteBtnHtml = isCurrentUserAdmin 
                         ? `<button class="delete-btn" onclick="deletePost(${post.id})">🗑️ 削除</button>` 
                         : '';
@@ -264,7 +277,6 @@
             }
         }
 
-        // 削除処理
         async function deletePost(postId) {
             const confirmed = confirm(`【No.${postId}】のお知らせを非表示（削除）にしますか？\n※いつでも管理者画面から復旧できます。`);
             if (!confirmed) return;
