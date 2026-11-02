@@ -47,13 +47,37 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// お知らせ一覧を送る窓口
+// お知らせ一覧と、その記事を読んだ人のリストを送る窓口（書き換え）
 app.get('/api/posts', (req, res) => {
-    db.all("SELECT * FROM posts ORDER BY id DESC", (err, rows) => {
+    // 1. まずはお知らせ一覧を取得
+    db.all("SELECT * FROM posts ORDER BY id DESC", (err, posts) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
+        
+        if (posts.length === 0) return res.json([]); // 記事がない場合
+
+        // 2. 既読者リストも取得する
+        db.all("SELECT post_id, line_user_id FROM read_logs", (err, logs) => {
+            if (err) return res.status(500).json({ error: err.message });
+
+            // 3. お知らせデータに「読んだ人リスト(readers)」をくっつける
+            const postsWithReaders = posts.map(post => {
+                // この記事(post.id)の既読記録だけを抽出
+                const readers = logs
+                    .filter(log => log.post_id === post.id)
+                    .map(log => log.line_user_id); // ひとまずLINEのIDをリストにする
+
+                return {
+                    ...post,
+                    readers: readers // readers: ['U123...', 'U456...'] という形になる
+                };
+            });
+
+            // 合体させたデータを送る
+            res.json(postsWithReaders);
+        });
     });
 });
+
 
 // ★追加：「読みました」を受け取って記録する窓口
 app.post('/api/read', (req, res) => {

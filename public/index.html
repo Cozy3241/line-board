@@ -96,27 +96,30 @@
 
                 posts.forEach(post => {
                     const date = new Date(post.created_at).toLocaleString('ja-JP');
-                    
-                    // ★追加 3. この記事が「既読リスト」に入っているかチェック
                     const isRead = readPostIds.includes(post.id);
                     
-                    // ★追加 4. 既読なら灰色のボタン、未読なら緑のボタンのHTMLを用意する
                     let buttonHtml = '';
                     if (isRead) {
-                        // 既読の場合（disabledで押せなくする）
                         buttonHtml = `<button class="read-btn" disabled>既読済</button>`;
                     } else {
-                        // 未読の場合
                         buttonHtml = `<button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>`;
                     }
 
+                    // ★追加 既読人数の計算と、表示用のHTML作成
+                    const readCount = post.readers ? post.readers.length : 0;
+                    
                     const card = document.createElement('div');
                     card.className = 'post-card';
+                    // ★追加 下部に「既読〇名」の表示を追加
                     card.innerHTML = `
                         <h2 class="post-title">${post.title}</h2>
                         <p class="post-body">${post.body}</p>
                         <div class="post-date">${date}</div>
-                        ${buttonHtml}  <!-- 用意したボタンを表示 -->
+                        ${buttonHtml}
+                        <div style="margin-top: 15px; font-size: 0.85rem; color: #555; background-color: #f9f9f9; padding: 8px; border-radius: 4px;">
+                            <strong>既読 ${readCount} 名</strong><br>
+                            <span style="font-size: 0.7rem; color: #999;">（読んだ人のID: ${post.readers.join(', ')}）</span>
+                        </div>
                     `;
                     container.appendChild(card);
                 });
@@ -124,7 +127,7 @@
                 console.error('取得失敗', error);
             }
         }
-        
+
 
         // ★追加：ボタンを押したときに動く機能
         async function markAsRead(postId) {
