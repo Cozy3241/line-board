@@ -45,6 +45,17 @@ async function initDB() {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'
         `);
 
+        // ★追加：コメント（質疑応答）テーブル
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS comments (
+                id SERIAL PRIMARY KEY,
+                post_id INTEGER,
+                line_user_id TEXT,
+                body TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         console.log('PostgreSQL（Supabase）に正常に接続・準備完了しました！');
     } catch (err) {
         console.error('データベース初期化エラー:', err);
@@ -78,7 +89,7 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// お知らせ一覧、既読者、未読者の取得
+// お知らせ一覧、既読者、未読者、★コメント一覧の取得
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts ORDER BY id DESC");
@@ -96,6 +107,15 @@ app.get('/api/posts', async (req, res) => {
         `);
         const logs = logsRes.rows;
 
+        // ★追加：コメント一覧を取得（書いた人の名前と役職も合体）
+        const commentsRes = await pool.query(`
+            SELECT c.id, c.post_id, c.body, c.created_at, u.name, u.role
+            FROM comments c
+            LEFT JOIN users u ON c.line_user_id = u.line_user_id
+            ORDER BY c.id ASC
+        `);
+        const allComments = commentsRes.rows;
+
         const postsWithStatus = posts.map(post => {
             const postLogs = logs.filter(log => log.post_id === post.id);
             const readUserIds = postLogs.map(log => log.line_user_id);
@@ -108,12 +128,16 @@ app.get('/api/posts', async (req, res) => {
             const totalUsers = allUsers.length;
             const readRate = totalUsers > 0 ? Math.round((readers.length / totalUsers) * 100) : 0;
 
+            // ★この記事にぶら下がっているコメントを抽出
+            const postComments = allComments.filter(c => c.post_id === post.id);
+
             return {
                 ...post,
                 readers: readers,
                 unreaders: unreaders,
                 readRate: readRate,
-                totalUsers: totalUsers
+                totalUsers: totalUsers,
+                comments: postComments // ★コメントリストを追加！
             };
         });
 
@@ -150,31 +174,43 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// ★書き換え：お知らせ投稿（notify_type に応じてLINE通知を制御）
+// ★追加：コメント（質問・返信）を投稿する窓口
+app.post('/api/comments', async (req, res) => {
+    const { post_id, line_user_id, body } = req.body;
+    if (!body || !body.trim()) {
+        return res.status(400).json({ error: 'コメントを入力してください' });
+    }
+
+    try {
+        await pool.query(
+            "INSERT INTO comments (post_id, line_user_id, body) VALUES ($1, $2, $3)",
+            [post_id, line_user_id, body.trim()]
+        );
+        res.json({ success: true });
+    } catch (err) {
+        console.error('コメント投稿エラー:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// お知らせ投稿
 app.post('/api/posts', async (req, res) => {
     const { title, body, line_user_id, notify_type } = req.body;
 
     try {
-        const userRes = await pool.query(
-            "SELECT role FROM users WHERE line_user_id = $1", 
-            [line_user_id]
-        );
+        const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
         const role = userRes.rows[0]?.role || 'user';
-        
         if (role !== 'admin') {
             return res.status(403).json({ error: '投稿権限がありません（管理者のみ投稿可能です）' });
         }
 
         if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
 
-        // 1. データベースに保存
         await pool.query("INSERT INTO posts (title, body) VALUES ($1, $2)", [title, body]);
 
-        // 2. LINE通知の制御
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
         const liffUrl = process.env.LIFF_URL;
 
-        // ★「none（通知しない）」以外で、設定が揃っていれば通知を送る！
         if (notify_type !== 'none' && token && liffUrl) {
             const flexMessage = {
                 type: 'flex',
@@ -213,9 +249,6 @@ app.post('/api/posts', async (req, res) => {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ messages: [flexMessage] })
             });
-            console.log('全員にLINE通知を送信しました');
-        } else {
-            console.log('LINE通知はスキップされました（掲示板のみ掲載）');
         }
 
         res.json({ success: true });

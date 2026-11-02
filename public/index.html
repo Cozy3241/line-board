@@ -65,6 +65,20 @@
             cursor: pointer;
         }
         .read-btn:disabled { background-color: #ccc; cursor: not-allowed; }
+
+        /* コメントの吹き出しデザイン */
+        .comment-item {
+            background: #f1f5f9;
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+        }
+        .comment-user { font-weight: bold; color: #334155; margin-bottom: 2px; }
+        .comment-body { color: #1e293b; white-space: pre-wrap; }
+        .comment-badge {
+            background: #0284c7; color: white; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+        }
     </style>
 </head>
 <body>
@@ -76,13 +90,11 @@
         </div>
     </div>
 
-    <!-- 管理者専用投稿フォーム -->
     <div id="admin-form" class="form-card">
         <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿</h3>
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
         <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
         
-        <!-- ★追加：LINE通知を送るかどうかの選択 -->
         <div style="margin-bottom: 15px; font-size: 0.9rem; color: #444; background: #f0fdf4; padding: 10px; border-radius: 6px; border: 1px solid #bbf7d0;">
             <strong style="display:block; margin-bottom: 6px;">🔔 LINEプッシュ通知の設定:</strong>
             <label style="margin-right: 15px; cursor: pointer; display: inline-block; margin-bottom: 4px;">
@@ -161,6 +173,23 @@
                     const totalUsers = post.totalUsers || readers.length;
                     const readRate = post.readRate !== undefined ? post.readRate : 0;
 
+                    // ★コメント一覧のHTMLを組み立てる
+                    const comments = post.comments || [];
+                    let commentsHtml = '';
+                    if (comments.length === 0) {
+                        commentsHtml = '<p style="color:#94a3b8; font-size:0.8rem; margin:6px 0;">まだ質問やコメントはありません。</p>';
+                    } else {
+                        commentsHtml = comments.map(c => `
+                            <div class="comment-item">
+                                <div class="comment-user">
+                                    ${c.name || '名前未登録'}
+                                    ${c.role === 'admin' ? '<span class="comment-badge">管理者</span>' : ''}
+                                </div>
+                                <div class="comment-body">${c.body}</div>
+                            </div>
+                        `).join('');
+                    }
+
                     const card = document.createElement('div');
                     card.className = 'post-card';
                     card.innerHTML = `
@@ -181,6 +210,21 @@
                                 <strong>✖ 未読の人:</strong> ${unreadersText}
                             </div>
                         </div>
+
+                        <!-- ★追加：質問・コメントの折りたたみエリア -->
+                        <details style="margin-top: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px;">
+                            <summary style="font-weight: bold; cursor: pointer; color: #0284c7; font-size: 0.9rem; outline: none;">
+                                💬 質問・コメント (${comments.length}件)
+                            </summary>
+                            <div style="margin-top: 10px;">
+                                ${commentsHtml}
+                                
+                                <div style="display: flex; gap: 6px; margin-top: 10px;">
+                                    <input type="text" id="comment-input-${post.id}" placeholder="質問や返信を入力..." style="flex: 1; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem; box-sizing: border-box;">
+                                    <button onclick="addComment(${post.id})" style="padding: 8px 12px; background: #0284c7; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 0.85rem; cursor: pointer;">送信</button>
+                                </div>
+                            </div>
+                        </details>
                     `;
                     container.appendChild(card);
                 });
@@ -209,13 +253,40 @@
             }
         }
 
+        // ★追加：コメント送信の処理
+        async function addComment(postId) {
+            const input = document.getElementById(`comment-input-${postId}`);
+            const body = input.value.trim();
+            if (!body) return;
+
+            try {
+                const response = await fetch('/api/comments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        post_id: postId,
+                        line_user_id: myLineUserId,
+                        body: body
+                    })
+                });
+
+                if (response.ok) {
+                    input.value = '';
+                    loadPosts(); // 再読み込みしてコメントを表示
+                } else {
+                    alert('コメントの送信に失敗しました');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('通信エラーが発生しました');
+            }
+        }
+
         async function createPost() {
             const titleInput = document.getElementById('new-title');
             const bodyInput = document.getElementById('new-body');
             const title = titleInput.value.trim();
             const body = bodyInput.value.trim();
-
-            // ★追加：どちらのラジオボタンが選ばれているか取得
             const notifyType = document.querySelector('input[name="notify_type"]:checked').value;
 
             if (!title || !body) {
@@ -227,7 +298,6 @@
                 const response = await fetch('/api/posts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    // ★ notify_type も一緒に送信！
                     body: JSON.stringify({ 
                         title, 
                         body, 
