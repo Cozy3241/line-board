@@ -45,7 +45,6 @@ async function initDB() {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'
         `);
 
-        // ★追加：コメント（質疑応答）テーブル
         await pool.query(`
             CREATE TABLE IF NOT EXISTS comments (
                 id SERIAL PRIMARY KEY,
@@ -89,7 +88,7 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// お知らせ一覧、既読者、未読者、★コメント一覧の取得
+// お知らせ一覧、既読者、未読者、コメント一覧の取得
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts ORDER BY id DESC");
@@ -107,7 +106,6 @@ app.get('/api/posts', async (req, res) => {
         `);
         const logs = logsRes.rows;
 
-        // ★追加：コメント一覧を取得（書いた人の名前と役職も合体）
         const commentsRes = await pool.query(`
             SELECT c.id, c.post_id, c.body, c.created_at, u.name, u.role
             FROM comments c
@@ -127,8 +125,6 @@ app.get('/api/posts', async (req, res) => {
 
             const totalUsers = allUsers.length;
             const readRate = totalUsers > 0 ? Math.round((readers.length / totalUsers) * 100) : 0;
-
-            // ★この記事にぶら下がっているコメントを抽出
             const postComments = allComments.filter(c => c.post_id === post.id);
 
             return {
@@ -137,7 +133,7 @@ app.get('/api/posts', async (req, res) => {
                 unreaders: unreaders,
                 readRate: readRate,
                 totalUsers: totalUsers,
-                comments: postComments // ★コメントリストを追加！
+                comments: postComments
             };
         });
 
@@ -174,7 +170,7 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// ★追加：コメント（質問・返信）を投稿する窓口
+// ★神機能：コメント投稿 ＋ 管理者にだけLINE通知を自動送信！
 app.post('/api/comments', async (req, res) => {
     const { post_id, line_user_id, body } = req.body;
     if (!body || !body.trim()) {
@@ -182,10 +178,78 @@ app.post('/api/comments', async (req, res) => {
     }
 
     try {
+        // 1. コメントをデータベースに保存
         await pool.query(
             "INSERT INTO comments (post_id, line_user_id, body) VALUES ($1, $2, $3)",
             [post_id, line_user_id, body.trim()]
         );
+
+        // 2. このお知らせのタイトルと、コメントした人の名前を取得
+        const postRes = await pool.query("SELECT title FROM posts WHERE id = $1", [post_id]);
+        const postTitle = postRes.rows[0]?.title || 'お知らせ';
+
+        const userRes = await pool.query("SELECT name FROM users WHERE line_user_id = $1", [line_user_id]);
+        const commenterName = userRes.rows[0]?.name || 'スタッフ';
+
+        // 3. 管理者（role = 'admin'）のLINE ID一覧を全員取得！
+        const adminRes = await pool.query("SELECT line_user_id FROM users WHERE role = 'admin'");
+        const adminIds = adminRes.rows.map(r => r.line_user_id);
+
+        const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+        const liffUrl = process.env.LIFF_URL;
+
+        // 4. 管理者だけにプッシュ通知（Multicast）を一斉送信！
+        if (token && liffUrl && adminIds.length > 0) {
+            const flexMessage = {
+                type: 'flex',
+                altText: `💬【質問・コメント】${commenterName}さんより`,
+                contents: {
+                    type: 'bubble',
+                    header: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            { type: 'text', text: '💬 新しい質問・コメント', weight: 'bold', color: '#0284c7', size: 'sm' },
+                            { type: 'text', text: `対象: ${postTitle}`, weight: 'bold', size: 'md', wrap: true, margin: 'sm' }
+                        ]
+                    },
+                    body: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            { type: 'text', text: `👤 投稿者: ${commenterName}`, weight: 'bold', size: 'sm', color: '#334155' },
+                            { type: 'text', text: body.trim(), wrap: true, size: 'sm', color: '#64748b', margin: 'md' }
+                        ]
+                    },
+                    footer: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [{
+                            type: 'button',
+                            style: 'primary',
+                            color: '#0284c7',
+                            height: 'sm',
+                            action: { type: 'uri', label: '確認して返信する', uri: liffUrl }
+                        }]
+                    }
+                }
+            };
+
+            // multicast API: 指定した人（管理者たち）だけに送るLINEの機能
+            await fetch('https://api.line.me/v2/bot/message/multicast', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    to: adminIds,
+                    messages: [flexMessage]
+                })
+            });
+            console.log('管理者へ質問通知を送信しました！');
+        }
+
         res.json({ success: true });
     } catch (err) {
         console.error('コメント投稿エラー:', err);
