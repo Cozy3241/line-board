@@ -142,6 +142,8 @@ app.post('/api/read', async (req, res) => {
 // === (前略) ===
 
 // ★書き換え：お知らせを投稿し、LINE通知も一斉送信する
+// === (前略) ===
+
 app.post('/api/posts', async (req, res) => {
     const { title, body } = req.body;
     
@@ -150,35 +152,65 @@ app.post('/api/posts', async (req, res) => {
     }
 
     try {
-        // 1. データベースにお知らせを保存
         await pool.query(
             "INSERT INTO posts (title, body) VALUES ($1, $2)",
             [title, body]
         );
 
-        // 2. LINE公式アカウントから友だち全員にプッシュ通知を送信！
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-        if (token) {
-            const messageData = {
-                messages: [
-                    {
-                        type: 'text',
-                        text: `📢【新しい社内連絡】\n\n■${title}\n${body}\n\n👇確認して「読みました」を押してください\nhttps://liff.line.me/${process.env.LIFF_ID || ''}`
-                        // ※URLは後ほど自動リンクになります
+        const liffUrl = process.env.LIFF_URL; // ★追加：環境変数からLIFF URLを取得
+
+        if (token && liffUrl) {
+            // ★変更：LINE公式アカウント特有の「ボタン付きカード型メッセージ（Flex Message）」にする
+            const flexMessage = {
+                type: 'flex',
+                altText: `📢【連絡】${title}`,
+                contents: {
+                    type: 'bubble',
+                    header: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            { type: 'text', text: '社内掲示板', weight: 'bold', color: '#00b900', size: 'sm' },
+                            { type: 'text', text: title, weight: 'bold', size: 'lg', wrap: true, margin: 'md' }
+                        ]
+                    },
+                    body: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            { type: 'text', text: body, wrap: true, size: 'sm', color: '#666666' }
+                        ]
+                    },
+                    footer: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            {
+                                type: 'button',
+                                style: 'primary',
+                                color: '#00b900',
+                                height: 'sm',
+                                action: {
+                                    type: 'uri',
+                                    label: '確認して「読みました」を押す',
+                                    uri: liffUrl // ★タップするとLIFF掲示板が開く！
+                                }
+                            }
+                        ]
                     }
-                ]
+                }
             };
 
-            // LINEのサーバーに「全員に送信して！」とリクエストを送る
             await fetch('https://api.line.me/v2/bot/message/broadcast', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify(messageData)
+                body: JSON.stringify({ messages: [flexMessage] })
             });
-            console.log('LINE通知を一斉送信しました！');
+            console.log('カード型LINE通知を一斉送信しました！');
         }
 
         res.json({ success: true, message: '投稿＆通知送信が完了しました！' });
@@ -187,7 +219,6 @@ app.post('/api/posts', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 
 
 app.listen(port, () => {
