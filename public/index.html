@@ -76,10 +76,17 @@
             }
         }
 
+// お知らせを取得する関数（書き換え）
         async function loadPosts() {
             try {
+                // 1. お知らせ一覧をサーバーから取得
                 const response = await fetch('/api/posts');
                 const posts = await response.json();
+                
+                // ★追加 2. 自分がすでに読んだ記事のIDリストを取得
+                const readResponse = await fetch(`/api/my_reads?line_user_id=${myLineUserId}`);
+                const readPostIds = await readResponse.json();
+
                 const container = document.getElementById('posts-container');
                 
                 if (posts.length === 0) {
@@ -89,14 +96,27 @@
 
                 posts.forEach(post => {
                     const date = new Date(post.created_at).toLocaleString('ja-JP');
+                    
+                    // ★追加 3. この記事が「既読リスト」に入っているかチェック
+                    const isRead = readPostIds.includes(post.id);
+                    
+                    // ★追加 4. 既読なら灰色のボタン、未読なら緑のボタンのHTMLを用意する
+                    let buttonHtml = '';
+                    if (isRead) {
+                        // 既読の場合（disabledで押せなくする）
+                        buttonHtml = `<button class="read-btn" disabled>既読済</button>`;
+                    } else {
+                        // 未読の場合
+                        buttonHtml = `<button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>`;
+                    }
+
                     const card = document.createElement('div');
                     card.className = 'post-card';
-                    // ★追加：ボタンのHTML（押したら markAsRead という関数が動く）
                     card.innerHTML = `
                         <h2 class="post-title">${post.title}</h2>
                         <p class="post-body">${post.body}</p>
                         <div class="post-date">${date}</div>
-                        <button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>
+                        ${buttonHtml}  <!-- 用意したボタンを表示 -->
                     `;
                     container.appendChild(card);
                 });
@@ -104,6 +124,7 @@
                 console.error('取得失敗', error);
             }
         }
+        
 
         // ★追加：ボタンを押したときに動く機能
         async function markAsRead(postId) {

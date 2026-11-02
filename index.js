@@ -70,6 +70,23 @@ app.post('/api/read', (req, res) => {
     });
 });
 
+
+// ★追加：「自分が読んだ記事のIDリスト」を返す窓口
+app.get('/api/my_reads', (req, res) => {
+    // 誰からの質問か（LINE ID）を受け取る
+    const userId = req.query.line_user_id;
+    
+    // データベースから、この人が読んだpost_idを探す
+    db.all("SELECT post_id FROM read_logs WHERE line_user_id = ?", [userId], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        // 扱いやすいように [1, 2, 5] のような数字のリストにして返す
+        const readPostIds = rows.map(row => row.post_id);
+        res.json(readPostIds);
+    });
+});
+
+
 app.listen(port, () => {
   console.log(`サーバー起動：http://localhost:${port}`);
 });
