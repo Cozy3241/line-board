@@ -46,18 +46,31 @@
             padding: 15px;
             margin-bottom: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            transition: all 0.5s ease; /* スムーズなアニメーション用 */
+            transition: all 0.5s ease;
         }
-        /* ★ジャンプしてきた時にピカッと光る強調枠 */
         .highlight-card {
             border: 2px solid #0284c7;
             box-shadow: 0 0 12px rgba(2, 132, 199, 0.4);
         }
 
-        .post-title { margin: 0 0 10px 0; font-size: 1.2rem; color: #333; }
-        .post-body { margin: 0; color: #666; font-size: 0.95rem; white-space: pre-wrap; }
+        .post-title { margin: 0; font-size: 1.15rem; color: #333; line-height: 1.4; }
+        .post-body { margin: 10px 0 0 0; color: #666; font-size: 0.95rem; white-space: pre-wrap; }
         .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
         
+        /* 削除ボタンのデザイン */
+        .delete-btn {
+            background: #fee2e2;
+            border: 1px solid #fca5a5;
+            color: #dc2626;
+            font-size: 0.8rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .delete-btn:hover { background-color: #fecaca; }
+
         .read-btn {
             display: block;
             width: 100%;
@@ -118,6 +131,7 @@
 
     <script>
         let myLineUserId = "";
+        let isCurrentUserAdmin = false;
 
         async function main() {
             await liff.init({ liffId: "2010518553-09VESXxS" }); // ※ID入れてください！
@@ -136,7 +150,9 @@
                 });
                 const syncData = await syncRes.json();
 
-                if (syncData.isAdmin) {
+                isCurrentUserAdmin = syncData.isAdmin; // 管理者フラグをセット
+
+                if (isCurrentUserAdmin) {
                     document.getElementById('admin-badge').style.display = 'inline';
                     document.getElementById('admin-form').style.display = 'block';
                 }
@@ -145,8 +161,6 @@
                 document.getElementById('content').style.display = 'block';
 
                 await loadPosts();
-
-                // ★追加：URLに ?postId=〇〇 が入っていたら、そのカードに自動ジャンプする！
                 checkAndScrollToTarget();
             }
         }
@@ -198,13 +212,20 @@
                         `).join('');
                     }
 
+                    // 管理者なら削除ボタンを出す
+                    const deleteBtnHtml = isCurrentUserAdmin 
+                        ? `<button class="delete-btn" onclick="deletePost(${post.id})">🗑️ 削除</button>` 
+                        : '';
+
                     const card = document.createElement('div');
                     card.className = 'post-card';
-                    card.id = `post-${post.id}`; // ★ジャンプ用のIDを設定
+                    card.id = `post-${post.id}`;
 
-                    // ★タイトルの頭に【No.〇】を追加！
                     card.innerHTML = `
-                        <h2 class="post-title"><span style="color:#0284c7;">【No.${post.id}】</span> ${post.title}</h2>
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+                            <h2 class="post-title"><span style="color:#0284c7;">【No.${post.id}】</span> ${post.title}</h2>
+                            ${deleteBtnHtml}
+                        </div>
                         <p class="post-body">${post.body}</p>
                         <div class="post-date">${date}</div>
                         ${buttonHtml}
@@ -222,7 +243,6 @@
                             </div>
                         </div>
 
-                        <!-- ★コメント欄にIDをつけて自動オープンできるようにする -->
                         <details id="details-${post.id}" style="margin-top: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px;">
                             <summary style="font-weight: bold; cursor: pointer; color: #0284c7; font-size: 0.9rem; outline: none;">
                                 💬 質問・コメント (${comments.length}件)
@@ -244,7 +264,31 @@
             }
         }
 
-        // ★追加：URLの ?postId=〇〇 を見て自動スクロール＆コメント展開する機能
+        // 削除処理
+        async function deletePost(postId) {
+            const confirmed = confirm(`【No.${postId}】のお知らせを非表示（削除）にしますか？\n※いつでも管理者画面から復旧できます。`);
+            if (!confirmed) return;
+
+            try {
+                const response = await fetch('/api/posts/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ post_id: postId, line_user_id: myLineUserId })
+                });
+
+                if (response.ok) {
+                    alert('削除しました！');
+                    loadPosts();
+                } else {
+                    const err = await response.json();
+                    alert(err.error || '削除に失敗しました');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('通信エラーが発生しました');
+            }
+        }
+
         function checkAndScrollToTarget() {
             const urlParams = new URLSearchParams(window.location.search);
             const targetPostId = urlParams.get('postId');
@@ -254,14 +298,9 @@
                 const targetDetails = document.getElementById(`details-${targetPostId}`);
 
                 if (targetCard) {
-                    // 1. スーッとスクロール
                     targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    // 2. 青く光らせる
                     targetCard.classList.add('highlight-card');
-                    // 3. コメント欄をパカッと開く
-                    if (targetDetails) {
-                        targetDetails.open = true;
-                    }
+                    if (targetDetails) targetDetails.open = true;
                 }
             }
         }
@@ -295,17 +334,12 @@
                 const response = await fetch('/api/comments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        post_id: postId,
-                        line_user_id: myLineUserId,
-                        body: body
-                    })
+                    body: JSON.stringify({ post_id: postId, line_user_id: myLineUserId, body: body })
                 });
 
                 if (response.ok) {
                     input.value = '';
                     await loadPosts();
-                    // コメント追加後、閉じてしまわないように再度開く
                     const details = document.getElementById(`details-${postId}`);
                     if (details) details.open = true;
                 } else {
@@ -324,21 +358,13 @@
             const body = bodyInput.value.trim();
             const notifyType = document.querySelector('input[name="notify_type"]:checked').value;
 
-            if (!title || !body) {
-                alert('タイトルと本文を入力してください');
-                return;
-            }
+            if (!title || !body) return alert('タイトルと本文を入力してください');
 
             try {
                 const response = await fetch('/api/posts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        title, 
-                        body, 
-                        line_user_id: myLineUserId,
-                        notify_type: notifyType 
-                    })
+                    body: JSON.stringify({ title, body, line_user_id: myLineUserId, notify_type: notifyType })
                 });
 
                 if (response.ok) {
