@@ -135,6 +135,31 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
+
+// === (前略) ===
+
+// ★追加：新しいお知らせを投稿する窓口
+app.post('/api/posts', async (req, res) => {
+    const { title, body } = req.body;
+    
+    // タイトルか本文が空っぽの場合はエラーにする
+    if (!title || !body) {
+        return res.status(400).json({ error: 'タイトルと本文を入力してください' });
+    }
+
+    try {
+        // Supabaseの posts テーブルに新しいお知らせを保存する
+        await pool.query(
+            "INSERT INTO posts (title, body) VALUES ($1, $2)",
+            [title, body]
+        );
+        res.json({ success: true, message: '投稿が完了しました！' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
 app.listen(port, () => {
   console.log(`サーバー起動：http://localhost:${port}`);
 });

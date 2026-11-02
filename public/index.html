@@ -6,10 +6,41 @@
     <title>社内掲示板</title>
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
     <style>
-        body { font-family: sans-serif; padding: 20px; background-color: #f5f5f5; }
+        body { font-family: sans-serif; padding: 20px; background-color: #f5f5f5; margin: 0; }
         .header { text-align: center; margin-bottom: 20px; }
         .user-name { color: #00b900; font-weight: bold; }
         
+        /* 投稿フォームのカード */
+        .form-card {
+            background-color: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-top: 4px solid #0284c7;
+        }
+        .form-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        .submit-btn {
+            width: 100%;
+            padding: 10px;
+            background-color: #0284c7;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        /* お知らせカード */
         .post-card {
             background-color: white;
             border-radius: 8px;
@@ -18,10 +49,9 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .post-title { margin: 0 0 10px 0; font-size: 1.2rem; color: #333; }
-        .post-body { margin: 0; color: #666; font-size: 0.95rem; }
+        .post-body { margin: 0; color: #666; font-size: 0.95rem; white-space: pre-wrap; }
         .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
         
-        /* ★追加：読みましたボタンのデザイン */
         .read-btn {
             display: block;
             width: 100%;
@@ -35,11 +65,7 @@
             font-weight: bold;
             cursor: pointer;
         }
-        /* 押した後のボタンのデザイン */
-        .read-btn:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
+        .read-btn:disabled { background-color: #ccc; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -51,14 +77,22 @@
         </div>
     </div>
 
+    <!-- ★追加：新しいお知らせを投稿するフォーム -->
+    <div class="form-card">
+        <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿</h3>
+        <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
+        <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
+        <button class="submit-btn" onclick="createPost()">投稿する</button>
+    </div>
+
+    <!-- お知らせ一覧が表示される場所 -->
     <div id="posts-container"></div>
 
     <script>
-        // ★追加：自分のLINE IDを保存しておくための変数
         let myLineUserId = "";
 
         async function main() {
-            await liff.init({ liffId: "2010518553-09VESXxS" }); // ※ID入れてくださいね！
+            await liff.init({ liffId: "2010518553-09VESXxS" });
 
             if (!liff.isLoggedIn()) {
                 liff.login();
@@ -67,7 +101,6 @@
                 document.getElementById('name').innerText = profile.displayName;
                 myLineUserId = profile.userId;
 
-                // ★追加：サーバーの「名簿」に自分のIDと名前を登録（更新）する
                 await fetch('/api/sync_user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -84,18 +117,16 @@
             }
         }
 
-// お知らせを取得する関数（書き換え）
         async function loadPosts() {
             try {
-                // 1. お知らせ一覧をサーバーから取得
                 const response = await fetch('/api/posts');
                 const posts = await response.json();
                 
-                // ★追加 2. 自分がすでに読んだ記事のIDリストを取得
                 const readResponse = await fetch(`/api/my_reads?line_user_id=${myLineUserId}`);
                 const readPostIds = await readResponse.json();
 
                 const container = document.getElementById('posts-container');
+                container.innerHTML = ''; // ★一覧を一度綺麗にリセットする
                 
                 if (posts.length === 0) {
                     container.innerHTML = '<p style="text-align:center;">現在お知らせはありません。</p>';
@@ -106,19 +137,15 @@
                     const date = new Date(post.created_at).toLocaleString('ja-JP');
                     const isRead = readPostIds.includes(post.id);
                     
-                    let buttonHtml = '';
-                    if (isRead) {
-                        buttonHtml = `<button class="read-btn" disabled>既読済</button>`;
-                    } else {
-                        buttonHtml = `<button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>`;
-                    }
+                    let buttonHtml = isRead 
+                        ? `<button class="read-btn" disabled>既読済</button>`
+                        : `<button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>`;
 
-                    // ★追加 既読人数の計算と、表示用のHTML作成
                     const readCount = post.readers ? post.readers.length : 0;
-                    
+                    const readersText = post.readers && post.readers.length > 0 ? post.readers.join(', ') : 'なし';
+
                     const card = document.createElement('div');
                     card.className = 'post-card';
-                    // ★追加 下部に「既読〇名」の表示を追加
                     card.innerHTML = `
                         <h2 class="post-title">${post.title}</h2>
                         <p class="post-body">${post.body}</p>
@@ -126,7 +153,7 @@
                         ${buttonHtml}
                         <div style="margin-top: 15px; font-size: 0.85rem; color: #555; background-color: #f9f9f9; padding: 8px; border-radius: 4px;">
                             <strong>既読 ${readCount} 名</strong><br>
-                            <span style="font-size: 0.7rem; color: #999;">（読んだ人のID: ${post.readers.join(', ')}）</span>
+                            <span style="font-size: 0.8rem; color: #666;">（読んだ人: ${readersText}）</span>
                         </div>
                     `;
                     container.appendChild(card);
@@ -136,30 +163,56 @@
             }
         }
 
-
-        // ★追加：ボタンを押したときに動く機能
         async function markAsRead(postId) {
             const btn = document.getElementById(`btn-${postId}`);
-            
-            // サーバーに「読んだよ」データを送る
             try {
                 const response = await fetch('/api/read', {
-                    method: 'POST', // データを送るときの方法
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        post_id: postId,
-                        line_user_id: myLineUserId
-                    })
+                    body: JSON.stringify({ post_id: postId, line_user_id: myLineUserId })
                 });
 
                 if (response.ok) {
-                    // 成功したら、ボタンを灰色にして押せなくする
                     btn.innerText = "既読済";
                     btn.disabled = true;
+                    loadPosts(); // 既読人数や名前を即座に更新する
                 }
             } catch (error) {
                 console.error('送信エラー', error);
-                alert('エラーが発生しました。もう一度お試しください。');
+                alert('エラーが発生しました。');
+            }
+        }
+
+        // ★追加：投稿ボタンを押した時の機能
+        async function createPost() {
+            const titleInput = document.getElementById('new-title');
+            const bodyInput = document.getElementById('new-body');
+            const title = titleInput.value.trim();
+            const body = bodyInput.value.trim();
+
+            if (!title || !body) {
+                alert('タイトルと本文を入力してください');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/posts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, body })
+                });
+
+                if (response.ok) {
+                    alert('投稿しました！');
+                    titleInput.value = '';
+                    bodyInput.value = '';
+                    loadPosts(); // 投稿後、自動でお知らせ一覧を更新する！
+                } else {
+                    alert('投稿に失敗しました');
+                }
+            } catch (error) {
+                console.error('投稿エラー:', error);
+                alert('通信エラーが発生しました');
             }
         }
 
