@@ -1,110 +1,138 @@
 const express = require('express');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg'); // PostgreSQL用の部品
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static('public'));
 
-// === データベースの設定 ===
-const db = new sqlite3.Database('./database.sqlite', (err) => {
-    if (err) console.error('データベースを開けません:', err);
-    else console.log('データベースに接続しました！');
+// === データベース（PostgreSQL）の設定 ===
+// Renderの環境変数から接続URLを読み込みます
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // クラウド接続に必要な暗号化設定
 });
 
-db.serialize(() => {
-    // お知らせテーブル
-    db.run(`CREATE TABLE IF NOT EXISTS posts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT,
-        body TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+// テーブルの自動作成（PostgreSQL用の書き方に調整しています）
+async function initDB() {
+    try {
+        // お知らせテーブル
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS posts (
+                id SERIAL PRIMARY KEY,
+                title TEXT,
+                body TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
-    // 既読記録テーブル
-    db.run(`CREATE TABLE IF NOT EXISTS read_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        post_id INTEGER,
-        line_user_id TEXT,
-        read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(post_id, line_user_id)
-    )`);
+        // 既読記録テーブル
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS read_logs (
+                id SERIAL PRIMARY KEY,
+                post_id INTEGER,
+                line_user_id TEXT,
+                read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(post_id, line_user_id)
+            )
+        `);
 
-    // ★追加：ユーザー名簿テーブル
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        line_user_id TEXT PRIMARY KEY,
-        name TEXT
-    )`);
+        // ユーザー名簿テーブル
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                line_user_id TEXT PRIMARY KEY,
+                name TEXT
+            )
+        `);
 
-    // ★追加：お知らせが1件もなければ、テスト用のお知らせを自動で作る
-    db.get("SELECT COUNT(*) AS count FROM posts", (err, row) => {
-        if (!row || row.count === 0) {
-            db.run(`INSERT INTO posts (title, body) VALUES ('システム公開のお知らせ', '社内掲示板のテスト運用を開始します。よろしくお願いします！')`);
+        // テストデータがなければ1件追加する
+        const res = await pool.query("SELECT COUNT(*) AS count FROM posts");
+        if (parseInt(res.rows[0].count) === 0) {
+            await pool.query(`
+                INSERT INTO posts (title, body) 
+                VALUES ('システム公開のお知らせ', '社内掲示板のテスト運用を開始します。よろしくお願いします！')
+            `);
         }
-    });
-});
-// =========================
+        console.log('PostgreSQL（Supabase）に正常に接続・準備完了しました！');
+    } catch (err) {
+        console.error('データベース初期化エラー:', err);
+    }
+}
+initDB();
+// ======================================
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ★追加：スマホから「名前」を教えてもらった時に名簿を更新する窓口
-app.post('/api/sync_user', (req, res) => {
-    const userId = req.body.line_user_id;
-    const userName = req.body.name;
-    // INSERT OR REPLACE: なければ追加、あれば名前を上書き更新
-    db.run(`INSERT OR REPLACE INTO users (line_user_id, name) VALUES (?, ?)`, [userId, userName], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+// ユーザー名簿の更新
+app.post('/api/sync_user', async (req, res) => {
+    const { line_user_id, name } = req.body;
+    try {
+        await pool.query(`
+            INSERT INTO users (line_user_id, name) VALUES ($1, $2)
+            ON CONFLICT (line_user_id) DO UPDATE SET name = EXCLUDED.name
+        `, [line_user_id, name]);
         res.json({ success: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// お知らせ一覧と既読者（名前）を送る窓口
-app.get('/api/posts', (req, res) => {
-    db.all("SELECT * FROM posts ORDER BY id DESC", (err, posts) => {
-        if (err) return res.status(500).json({ error: err.message });
+// お知らせ一覧と既読者（名前）の取得
+app.get('/api/posts', async (req, res) => {
+    try {
+        const postsRes = await pool.query("SELECT * FROM posts ORDER BY id DESC");
+        const posts = postsRes.rows;
+
         if (posts.length === 0) return res.json([]);
 
-        // ★変更：read_logs と users を合体させて「名前」を取得する
-        const sql = `
+        const logsRes = await pool.query(`
             SELECT r.post_id, u.name 
             FROM read_logs r
             LEFT JOIN users u ON r.line_user_id = u.line_user_id
-        `;
-        db.all(sql, (err, logs) => {
-            if (err) return res.status(500).json({ error: err.message });
+        `);
+        const logs = logsRes.rows;
 
-            const postsWithReaders = posts.map(post => {
-                const readers = logs
-                    .filter(log => log.post_id === post.id)
-                    .map(log => log.name || '名前未登録'); // 名前があれば名前、なければ未登録
+        const postsWithReaders = posts.map(post => {
+            const readers = logs
+                .filter(log => log.post_id === post.id)
+                .map(log => log.name || '名前未登録');
 
-                return { ...post, readers: readers };
-            });
-            res.json(postsWithReaders);
+            return { ...post, readers: readers };
         });
-    });
+
+        res.json(postsWithReaders);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// 自分が読んだ記事IDを送る
-app.get('/api/my_reads', (req, res) => {
+// 自分が読んだ記事IDリストの取得
+app.get('/api/my_reads', async (req, res) => {
     const userId = req.query.line_user_id;
-    db.all("SELECT post_id FROM read_logs WHERE line_user_id = ?", [userId], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows.map(row => row.post_id));
-    });
+    try {
+        const resDb = await pool.query("SELECT post_id FROM read_logs WHERE line_user_id = $1", [userId]);
+        const readPostIds = resDb.rows.map(row => row.post_id);
+        res.json(readPostIds);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 既読を記録する
-app.post('/api/read', (req, res) => {
-    const postId = req.body.post_id;
-    const userId = req.body.line_user_id;
-    db.run(`INSERT OR IGNORE INTO read_logs (post_id, line_user_id) VALUES (?, ?)`, [postId, userId], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
+app.post('/api/read', async (req, res) => {
+    const { post_id, line_user_id } = req.body;
+    try {
+        await pool.query(`
+            INSERT INTO read_logs (post_id, line_user_id) VALUES ($1, $2)
+            ON CONFLICT (post_id, line_user_id) DO NOTHING
+        `, [post_id, line_user_id]);
         res.json({ success: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.listen(port, () => {
