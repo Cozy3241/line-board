@@ -58,16 +58,24 @@
         let myLineUserId = "";
 
         async function main() {
-            await liff.init({ liffId: "2010518553-09VESXxS" });
+            await liff.init({ liffId: "ここにあなたのLIFF IDを入れてください" }); // ※ID入れてくださいね！
 
             if (!liff.isLoggedIn()) {
                 liff.login();
             } else {
                 const profile = await liff.getProfile();
                 document.getElementById('name').innerText = profile.displayName;
-                
-                // 自分のLINE IDを変数に保存
                 myLineUserId = profile.userId;
+
+                // ★追加：サーバーの「名簿」に自分のIDと名前を登録（更新）する
+                await fetch('/api/sync_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        line_user_id: profile.userId,
+                        name: profile.displayName
+                    })
+                });
 
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('content').style.display = 'block';
