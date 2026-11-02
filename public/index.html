@@ -4,19 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>社内掲示板</title>
-    <!-- LINEの仕組みを読み込む -->
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; padding-top: 50px; }
-        .user-name { font-size: 1.5rem; color: #00b900; font-weight: bold; }
+        body { font-family: sans-serif; padding: 20px; background-color: #f5f5f5; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .user-name { color: #00b900; font-weight: bold; }
+        
+        /* お知らせカードのデザイン */
+        .post-card {
+            background-color: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .post-title { margin: 0 0 10px 0; font-size: 1.2rem; color: #333; }
+        .post-body { margin: 0; color: #666; font-size: 0.95rem; }
+        .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
     </style>
 </head>
 <body>
-    <h1>社内掲示板</h1>
-    <div id="loader">読み込み中...</div>
-    <div id="content" style="display:none;">
-        <p>こんにちは、<span id="name" class="user-name"></span>さん！</p>
-        <p>あなたのLINEユーザーID:<br><small id="userId"></small></p>
+    <div class="header">
+        <h1>社内掲示板</h1>
+        <div id="loader">読み込み中...</div>
+        <div id="content" style="display:none;">
+            <p>こんにちは、<span id="name" class="user-name"></span>さん！</p>
+        </div>
+    </div>
+
+    <!-- お知らせが表示される場所 -->
+    <div id="posts-container">
+        <!-- ここにJavaScriptでお知らせが追加されます -->
     </div>
 
     <script>
@@ -25,17 +43,54 @@
             await liff.init({ liffId: "2010518553-09VESXxS" });
 
             if (!liff.isLoggedIn()) {
-                liff.login(); // ログインしてなければログイン画面へ
+                liff.login();
             } else {
-                // ログインしていたらプロフィールを取得
+                // プロフィールを表示
                 const profile = await liff.getProfile();
                 document.getElementById('name').innerText = profile.displayName;
-                document.getElementById('userId').innerText = profile.userId;
-                
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('content').style.display = 'block';
+
+                // ★追加：お知らせをサーバーから取得して表示する
+                loadPosts();
             }
         }
+
+        // お知らせを取得する関数
+        async function loadPosts() {
+            try {
+                // サーバーの /api/posts にデータを取りに行く
+                const response = await fetch('/api/posts');
+                const posts = await response.json();
+                
+                const container = document.getElementById('posts-container');
+                
+                // データが空の場合
+                if (posts.length === 0) {
+                    container.innerHTML = '<p style="text-align:center;">現在お知らせはありません。</p>';
+                    return;
+                }
+
+                // 取得したお知らせを1つずつ画面に追加する
+                posts.forEach(post => {
+                    // 日付を見やすくする
+                    const date = new Date(post.created_at).toLocaleString('ja-JP');
+                    
+                    // カードのHTMLを作る
+                    const card = document.createElement('div');
+                    card.className = 'post-card';
+                    card.innerHTML = `
+                        <h2 class="post-title">${post.title}</h2>
+                        <p class="post-body">${post.body}</p>
+                        <div class="post-date">${date}</div>
+                    `;
+                    container.appendChild(card);
+                });
+            } catch (error) {
+                console.error('お知らせの取得に失敗しました', error);
+            }
+        }
+
         main();
     </script>
 </body>
