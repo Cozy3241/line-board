@@ -10,7 +10,9 @@
         .header { text-align: center; margin-bottom: 20px; }
         .user-name { color: #00b900; font-weight: bold; }
         
+        /* 投稿フォームのカード（最初は非表示にしておく） */
         .form-card {
+            display: none; /* ★初期状態では隠す */
             background-color: white;
             border-radius: 8px;
             padding: 15px;
@@ -71,12 +73,13 @@
         <h1>社内掲示板</h1>
         <div id="loader">読み込み中...</div>
         <div id="content" style="display:none;">
-            <p>こんにちは、<span id="name" class="user-name"></span>さん！</p>
+            <p>こんにちは、<span id="name" class="user-name"></span>さん！<span id="admin-badge" style="display:none; background:#0284c7; color:white; font-size:0.75rem; padding:2px 6px; border-radius:4px; margin-left:5px;">管理者</span></p>
         </div>
     </div>
 
-    <div class="form-card">
-        <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿</h3>
+    <!-- ★管理者だけに表示される投稿フォーム -->
+    <div id="admin-form" class="form-card">
+        <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿（管理者専用）</h3>
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
         <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
         <button class="submit-btn" onclick="createPost()">投稿する</button>
@@ -88,7 +91,7 @@
         let myLineUserId = "";
 
         async function main() {
-            await liff.init({ liffId: "2010518553-09VESXxS" }); // ※IDを入れてください！
+            await liff.init({ liffId: "ここにあなたのLIFF IDを入れてください" }); // ※ID入れてください！
 
             if (!liff.isLoggedIn()) {
                 liff.login();
@@ -97,11 +100,19 @@
                 document.getElementById('name').innerText = profile.displayName;
                 myLineUserId = profile.userId;
 
-                await fetch('/api/sync_user', {
+                // サーバーに登録＆管理者かどうかを確認
+                const syncRes = await fetch('/api/sync_user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ line_user_id: profile.userId, name: profile.displayName })
                 });
+                const syncData = await syncRes.json();
+
+                // ★追加：管理者なら「管理者バッジ」と「投稿フォーム」を表示する！
+                if (syncData.isAdmin) {
+                    document.getElementById('admin-badge').style.display = 'inline';
+                    document.getElementById('admin-form').style.display = 'block';
+                }
 
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('content').style.display = 'block';
@@ -204,7 +215,8 @@
                 const response = await fetch('/api/posts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, body })
+                    // ★ line_user_id も一緒に送ってサーバー側で本人確認させる
+                    body: JSON.stringify({ title, body, line_user_id: myLineUserId })
                 });
 
                 if (response.ok) {
@@ -213,7 +225,8 @@
                     bodyInput.value = '';
                     loadPosts();
                 } else {
-                    alert('投稿に失敗しました');
+                    const errData = await response.json();
+                    alert(errData.error || '投稿に失敗しました');
                 }
             } catch (error) {
                 console.error('投稿エラー:', error);
