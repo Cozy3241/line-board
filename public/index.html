@@ -46,7 +46,14 @@
             padding: 15px;
             margin-bottom: 15px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.5s ease; /* スムーズなアニメーション用 */
         }
+        /* ★ジャンプしてきた時にピカッと光る強調枠 */
+        .highlight-card {
+            border: 2px solid #0284c7;
+            box-shadow: 0 0 12px rgba(2, 132, 199, 0.4);
+        }
+
         .post-title { margin: 0 0 10px 0; font-size: 1.2rem; color: #333; }
         .post-body { margin: 0; color: #666; font-size: 0.95rem; white-space: pre-wrap; }
         .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
@@ -66,7 +73,6 @@
         }
         .read-btn:disabled { background-color: #ccc; cursor: not-allowed; }
 
-        /* コメントの吹き出しデザイン */
         .comment-item {
             background: #f1f5f9;
             padding: 8px 12px;
@@ -138,7 +144,10 @@
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('content').style.display = 'block';
 
-                loadPosts();
+                await loadPosts();
+
+                // ★追加：URLに ?postId=〇〇 が入っていたら、そのカードに自動ジャンプする！
+                checkAndScrollToTarget();
             }
         }
 
@@ -173,7 +182,6 @@
                     const totalUsers = post.totalUsers || readers.length;
                     const readRate = post.readRate !== undefined ? post.readRate : 0;
 
-                    // ★コメント一覧のHTMLを組み立てる
                     const comments = post.comments || [];
                     let commentsHtml = '';
                     if (comments.length === 0) {
@@ -192,8 +200,11 @@
 
                     const card = document.createElement('div');
                     card.className = 'post-card';
+                    card.id = `post-${post.id}`; // ★ジャンプ用のIDを設定
+
+                    // ★タイトルの頭に【No.〇】を追加！
                     card.innerHTML = `
-                        <h2 class="post-title">${post.title}</h2>
+                        <h2 class="post-title"><span style="color:#0284c7;">【No.${post.id}】</span> ${post.title}</h2>
                         <p class="post-body">${post.body}</p>
                         <div class="post-date">${date}</div>
                         ${buttonHtml}
@@ -211,8 +222,8 @@
                             </div>
                         </div>
 
-                        <!-- ★追加：質問・コメントの折りたたみエリア -->
-                        <details style="margin-top: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px;">
+                        <!-- ★コメント欄にIDをつけて自動オープンできるようにする -->
+                        <details id="details-${post.id}" style="margin-top: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px;">
                             <summary style="font-weight: bold; cursor: pointer; color: #0284c7; font-size: 0.9rem; outline: none;">
                                 💬 質問・コメント (${comments.length}件)
                             </summary>
@@ -230,6 +241,28 @@
                 });
             } catch (error) {
                 console.error('取得失敗', error);
+            }
+        }
+
+        // ★追加：URLの ?postId=〇〇 を見て自動スクロール＆コメント展開する機能
+        function checkAndScrollToTarget() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const targetPostId = urlParams.get('postId');
+
+            if (targetPostId) {
+                const targetCard = document.getElementById(`post-${targetPostId}`);
+                const targetDetails = document.getElementById(`details-${targetPostId}`);
+
+                if (targetCard) {
+                    // 1. スーッとスクロール
+                    targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // 2. 青く光らせる
+                    targetCard.classList.add('highlight-card');
+                    // 3. コメント欄をパカッと開く
+                    if (targetDetails) {
+                        targetDetails.open = true;
+                    }
+                }
             }
         }
 
@@ -253,7 +286,6 @@
             }
         }
 
-        // ★追加：コメント送信の処理
         async function addComment(postId) {
             const input = document.getElementById(`comment-input-${postId}`);
             const body = input.value.trim();
@@ -272,7 +304,10 @@
 
                 if (response.ok) {
                     input.value = '';
-                    loadPosts(); // 再読み込みしてコメントを表示
+                    await loadPosts();
+                    // コメント追加後、閉じてしまわないように再度開く
+                    const details = document.getElementById(`details-${postId}`);
+                    if (details) details.open = true;
                 } else {
                     alert('コメントの送信に失敗しました');
                 }

@@ -170,7 +170,7 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// ★神機能：コメント投稿 ＋ 管理者にだけLINE通知を自動送信！
+// コメント投稿 ＋ 管理者にだけLINE通知を自動送信
 app.post('/api/comments', async (req, res) => {
     const { post_id, line_user_id, body } = req.body;
     if (!body || !body.trim()) {
@@ -178,31 +178,30 @@ app.post('/api/comments', async (req, res) => {
     }
 
     try {
-        // 1. コメントをデータベースに保存
         await pool.query(
             "INSERT INTO comments (post_id, line_user_id, body) VALUES ($1, $2, $3)",
             [post_id, line_user_id, body.trim()]
         );
 
-        // 2. このお知らせのタイトルと、コメントした人の名前を取得
         const postRes = await pool.query("SELECT title FROM posts WHERE id = $1", [post_id]);
         const postTitle = postRes.rows[0]?.title || 'お知らせ';
 
         const userRes = await pool.query("SELECT name FROM users WHERE line_user_id = $1", [line_user_id]);
         const commenterName = userRes.rows[0]?.name || 'スタッフ';
 
-        // 3. 管理者（role = 'admin'）のLINE ID一覧を全員取得！
         const adminRes = await pool.query("SELECT line_user_id FROM users WHERE role = 'admin'");
         const adminIds = adminRes.rows.map(r => r.line_user_id);
 
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
         const liffUrl = process.env.LIFF_URL;
 
-        // 4. 管理者だけにプッシュ通知（Multicast）を一斉送信！
         if (token && liffUrl && adminIds.length > 0) {
+            // ★変更：ボタンURLの後ろに ?postId=番号 をつけて直接ジャンプできるようにする！
+            const targetUrl = `${liffUrl}?postId=${post_id}`;
+
             const flexMessage = {
                 type: 'flex',
-                altText: `💬【質問・コメント】${commenterName}さんより`,
+                altText: `💬【質問】No.${post_id} ${commenterName}さんより`,
                 contents: {
                     type: 'bubble',
                     header: {
@@ -210,7 +209,7 @@ app.post('/api/comments', async (req, res) => {
                         layout: 'vertical',
                         contents: [
                             { type: 'text', text: '💬 新しい質問・コメント', weight: 'bold', color: '#0284c7', size: 'sm' },
-                            { type: 'text', text: `対象: ${postTitle}`, weight: 'bold', size: 'md', wrap: true, margin: 'sm' }
+                            { type: 'text', text: `対象: 【No.${post_id}】${postTitle}`, weight: 'bold', size: 'md', wrap: true, margin: 'sm' }
                         ]
                     },
                     body: {
@@ -229,25 +228,18 @@ app.post('/api/comments', async (req, res) => {
                             style: 'primary',
                             color: '#0284c7',
                             height: 'sm',
-                            action: { type: 'uri', label: '確認して返信する', uri: liffUrl }
+                            action: { type: 'uri', label: '確認して返信する', uri: targetUrl }
                         }]
                     }
                 }
             };
 
-            // multicast API: 指定した人（管理者たち）だけに送るLINEの機能
             await fetch('https://api.line.me/v2/bot/message/multicast', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                    to: adminIds,
-                    messages: [flexMessage]
-                })
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ to: adminIds, messages: [flexMessage] })
             });
-            console.log('管理者へ質問通知を送信しました！');
+            console.log('管理者へジャンプURL付き質問通知を送信しました！');
         }
 
         res.json({ success: true });
@@ -270,15 +262,23 @@ app.post('/api/posts', async (req, res) => {
 
         if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
 
-        await pool.query("INSERT INTO posts (title, body) VALUES ($1, $2)", [title, body]);
+        // お知らせ保存時に、自動採番されたIDを取得する
+        const insertRes = await pool.query(
+            "INSERT INTO posts (title, body) VALUES ($1, $2) RETURNING id", 
+            [title, body]
+        );
+        const newPostId = insertRes.rows[0].id;
 
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
         const liffUrl = process.env.LIFF_URL;
 
         if (notify_type !== 'none' && token && liffUrl) {
+            // ★新規投稿通知も、直接そのカードにジャンプできるようにする！
+            const targetUrl = `${liffUrl}?postId=${newPostId}`;
+
             const flexMessage = {
                 type: 'flex',
-                altText: `📢【連絡】${title}`,
+                altText: `📢【連絡 No.${newPostId}】${title}`,
                 contents: {
                     type: 'bubble',
                     header: {
@@ -286,7 +286,7 @@ app.post('/api/posts', async (req, res) => {
                         layout: 'vertical',
                         contents: [
                             { type: 'text', text: '社内掲示板', weight: 'bold', color: '#00b900', size: 'sm' },
-                            { type: 'text', text: title, weight: 'bold', size: 'lg', wrap: true, margin: 'md' }
+                            { type: 'text', text: `【No.${newPostId}】${title}`, weight: 'bold', size: 'lg', wrap: true, margin: 'md' }
                         ]
                     },
                     body: {
@@ -302,7 +302,7 @@ app.post('/api/posts', async (req, res) => {
                             style: 'primary',
                             color: '#00b900',
                             height: 'sm',
-                            action: { type: 'uri', label: '確認して「読みました」を押す', uri: liffUrl }
+                            action: { type: 'uri', label: '確認して「読みました」を押す', uri: targetUrl }
                         }]
                     }
                 }
