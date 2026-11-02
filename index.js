@@ -110,16 +110,58 @@ app.get('/api/posts', async (req, res) => {
 });
 
 // 自分が読んだ記事IDリストの取得
-app.get('/api/my_reads', async (req, res) => {
-    const userId = req.query.line_user_id;
+// お知らせ一覧、既読者、未読者をまとめて計算して送る窓口（書き換え）
+app.get('/api/posts', async (req, res) => {
     try {
-        const resDb = await pool.query("SELECT post_id FROM read_logs WHERE line_user_id = $1", [userId]);
-        const readPostIds = resDb.rows.map(row => row.post_id);
-        res.json(readPostIds);
+        const postsRes = await pool.query("SELECT * FROM posts ORDER BY id DESC");
+        const posts = postsRes.rows;
+
+        if (posts.length === 0) return res.json([]);
+
+        // 1. 全ユーザー（名簿）を取得
+        const usersRes = await pool.query("SELECT line_user_id, name FROM users");
+        const allUsers = usersRes.rows;
+
+        // 2. 既読記録を取得
+        const logsRes = await pool.query(`
+            SELECT r.post_id, r.line_user_id, u.name 
+            FROM read_logs r
+            LEFT JOIN users u ON r.line_user_id = u.line_user_id
+        `);
+        const logs = logsRes.rows;
+
+        // 3. 各記事ごとに「読んだ人」と「未読の人」を割り出す
+        const postsWithStatus = posts.map(post => {
+            // この記事を読んだ人のログ
+            const postLogs = logs.filter(log => log.post_id === post.id);
+            const readUserIds = postLogs.map(log => log.line_user_id);
+            const readers = postLogs.map(log => log.name || '名前未登録');
+
+            // 名簿にいる人のうち、まだ読んでいない人（引き算）
+            const unreaders = allUsers
+                .filter(user => !readUserIds.includes(user.line_user_id))
+                .map(user => user.name || '名前未登録');
+
+            // 既読率の計算（%）
+            const totalUsers = allUsers.length;
+            const readRate = totalUsers > 0 ? Math.round((readers.length / totalUsers) * 100) : 0;
+
+            return {
+                ...post,
+                readers: readers,       // 読んだ人の名前リスト
+                unreaders: unreaders,   // まだ読んでない人の名前リスト
+                readRate: readRate,     // 既読率（例：75）
+                totalUsers: totalUsers  // 全員何人いるか
+            };
+        });
+
+        res.json(postsWithStatus);
     } catch (err) {
+        console.error('取得エラー:', err);
         res.status(500).json({ error: err.message });
     }
 });
+
 
 // 既読を記録する
 app.post('/api/read', async (req, res) => {
@@ -136,13 +178,9 @@ app.post('/api/read', async (req, res) => {
 });
 
 
-// === (前略) ===
-
 // ★追加：新しいお知らせを投稿する窓口
-// === (前略) ===
-
 // ★書き換え：お知らせを投稿し、LINE通知も一斉送信する
-// === (前略) ===
+
 
 app.post('/api/posts', async (req, res) => {
     const { title, body } = req.body;

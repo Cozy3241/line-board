@@ -141,8 +141,8 @@
                         ? `<button class="read-btn" disabled>既読済</button>`
                         : `<button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>`;
 
-                    const readCount = post.readers ? post.readers.length : 0;
-                    const readersText = post.readers && post.readers.length > 0 ? post.readers.join(', ') : 'なし';
+                    const readersText = post.readers && post.readers.length > 0 ? post.readers.join(', ') : 'まだいません';
+                    const unreadersText = post.unreaders && post.unreaders.length > 0 ? post.unreaders.join(', ') : 'なし（全員既読！）';
 
                     const card = document.createElement('div');
                     card.className = 'post-card';
@@ -151,9 +151,21 @@
                         <p class="post-body">${post.body}</p>
                         <div class="post-date">${date}</div>
                         ${buttonHtml}
-                        <div style="margin-top: 15px; font-size: 0.85rem; color: #555; background-color: #f9f9f9; padding: 8px; border-radius: 4px;">
-                            <strong>既読 ${readCount} 名</strong><br>
-                            <span style="font-size: 0.8rem; color: #666;">（読んだ人: ${readersText}）</span>
+                        
+                        <!-- ★追加：既読状況と未読者リストの表示エリア -->
+                        <div style="margin-top: 15px; font-size: 0.85rem; background-color: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                                <strong>既読状況: ${post.readers.length} / ${post.totalUsers} 名</strong>
+                                <strong style="color: #0284c7;">${post.readRate}%</strong>
+                            </div>
+                            
+                            <div style="margin-top: 8px; color: #16a34a;">
+                                <strong>✔ 読んだ人:</strong> ${readersText}
+                            </div>
+                            
+                            <div style="margin-top: 6px; color: #dc2626;">
+                                <strong>✖ 未読の人:</strong> ${unreadersText}
+                            </div>
                         </div>
                     `;
                     container.appendChild(card);
