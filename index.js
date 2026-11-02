@@ -36,6 +36,13 @@ db.serialize(() => {
         line_user_id TEXT PRIMARY KEY,
         name TEXT
     )`);
+
+    // ★追加：お知らせが1件もなければ、テスト用のお知らせを自動で作る
+    db.get("SELECT COUNT(*) AS count FROM posts", (err, row) => {
+        if (!row || row.count === 0) {
+            db.run(`INSERT INTO posts (title, body) VALUES ('システム公開のお知らせ', '社内掲示板のテスト運用を開始します。よろしくお願いします！')`);
+        }
+    });
 });
 // =========================
 
