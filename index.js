@@ -23,6 +23,11 @@ async function initDB() {
             )
         `);
 
+        // ★追加：論理削除フラグ（is_deleted）列を安全に追加
+        await pool.query(`
+            ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false
+        `);
+
         await pool.query(`
             CREATE TABLE IF NOT EXISTS read_logs (
                 id SERIAL PRIMARY KEY,
@@ -88,10 +93,11 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// お知らせ一覧、既読者、未読者、コメント一覧の取得
+// お知らせ一覧（★ is_deleted = false のものだけを取得！）
 app.get('/api/posts', async (req, res) => {
     try {
-        const postsRes = await pool.query("SELECT * FROM posts ORDER BY id DESC");
+        // ★論理削除されていない投稿だけを引っ張ってくる！
+        const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
         const posts = postsRes.rows;
 
         if (posts.length === 0) return res.json([]);
@@ -170,12 +176,10 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// コメント投稿 ＋ 管理者にだけLINE通知を自動送信
+// コメント投稿
 app.post('/api/comments', async (req, res) => {
     const { post_id, line_user_id, body } = req.body;
-    if (!body || !body.trim()) {
-        return res.status(400).json({ error: 'コメントを入力してください' });
-    }
+    if (!body || !body.trim()) return res.status(400).json({ error: 'コメントを入力してください' });
 
     try {
         await pool.query(
@@ -196,9 +200,7 @@ app.post('/api/comments', async (req, res) => {
         const liffUrl = process.env.LIFF_URL;
 
         if (token && liffUrl && adminIds.length > 0) {
-            // ★変更：ボタンURLの後ろに ?postId=番号 をつけて直接ジャンプできるようにする！
             const targetUrl = `${liffUrl}?postId=${post_id}`;
-
             const flexMessage = {
                 type: 'flex',
                 altText: `💬【質問】No.${post_id} ${commenterName}さんより`,
@@ -239,7 +241,6 @@ app.post('/api/comments', async (req, res) => {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ to: adminIds, messages: [flexMessage] })
             });
-            console.log('管理者へジャンプURL付き質問通知を送信しました！');
         }
 
         res.json({ success: true });
@@ -262,7 +263,6 @@ app.post('/api/posts', async (req, res) => {
 
         if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
 
-        // お知らせ保存時に、自動採番されたIDを取得する
         const insertRes = await pool.query(
             "INSERT INTO posts (title, body) VALUES ($1, $2) RETURNING id", 
             [title, body]
@@ -273,9 +273,7 @@ app.post('/api/posts', async (req, res) => {
         const liffUrl = process.env.LIFF_URL;
 
         if (notify_type !== 'none' && token && liffUrl) {
-            // ★新規投稿通知も、直接そのカードにジャンプできるようにする！
             const targetUrl = `${liffUrl}?postId=${newPostId}`;
-
             const flexMessage = {
                 type: 'flex',
                 altText: `📢【連絡 No.${newPostId}】${title}`,
@@ -318,6 +316,28 @@ app.post('/api/posts', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('投稿エラー:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ★論理削除：物理的に消さず、is_deleted フラグを true に更新するだけ！
+app.post('/api/posts/delete', async (req, res) => {
+    const { post_id, line_user_id } = req.body;
+
+    try {
+        const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
+        const role = userRes.rows[0]?.role || 'user';
+        if (role !== 'admin') {
+            return res.status(403).json({ error: '削除権限がありません（管理者のみ可能です）' });
+        }
+
+        // データを消さず、フラグだけを更新！関連する既読ログやコメントも完全に無傷で残ります
+        await pool.query("UPDATE posts SET is_deleted = true WHERE id = $1", [post_id]);
+
+        console.log(`No.${post_id} を論理削除（非表示）にしました`);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('削除エラー:', err);
         res.status(500).json({ error: err.message });
     }
 });
