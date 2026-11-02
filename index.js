@@ -139,25 +139,55 @@ app.post('/api/read', async (req, res) => {
 // === (前略) ===
 
 // ★追加：新しいお知らせを投稿する窓口
+// === (前略) ===
+
+// ★書き換え：お知らせを投稿し、LINE通知も一斉送信する
 app.post('/api/posts', async (req, res) => {
     const { title, body } = req.body;
     
-    // タイトルか本文が空っぽの場合はエラーにする
     if (!title || !body) {
         return res.status(400).json({ error: 'タイトルと本文を入力してください' });
     }
 
     try {
-        // Supabaseの posts テーブルに新しいお知らせを保存する
+        // 1. データベースにお知らせを保存
         await pool.query(
             "INSERT INTO posts (title, body) VALUES ($1, $2)",
             [title, body]
         );
-        res.json({ success: true, message: '投稿が完了しました！' });
+
+        // 2. LINE公式アカウントから友だち全員にプッシュ通知を送信！
+        const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+        if (token) {
+            const messageData = {
+                messages: [
+                    {
+                        type: 'text',
+                        text: `📢【新しい社内連絡】\n\n■${title}\n${body}\n\n👇確認して「読みました」を押してください\nhttps://liff.line.me/${process.env.LIFF_ID || ''}`
+                        // ※URLは後ほど自動リンクになります
+                    }
+                ]
+            };
+
+            // LINEのサーバーに「全員に送信して！」とリクエストを送る
+            await fetch('https://api.line.me/v2/bot/message/broadcast', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(messageData)
+            });
+            console.log('LINE通知を一斉送信しました！');
+        }
+
+        res.json({ success: true, message: '投稿＆通知送信が完了しました！' });
     } catch (err) {
+        console.error('投稿エラー:', err);
         res.status(500).json({ error: err.message });
     }
 });
+
 
 
 app.listen(port, () => {
