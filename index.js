@@ -33,7 +33,6 @@ async function initDB() {
             )
         `);
 
-        // ★ usersテーブルの作成（role列つき）
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 line_user_id TEXT PRIMARY KEY,
@@ -42,7 +41,6 @@ async function initDB() {
             )
         `);
 
-        // ★ すでにusersテーブルが存在する場合のために、role列を安全に追加する
         await pool.query(`
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'
         `);
@@ -58,24 +56,20 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ユーザー名簿の更新と、管理者かどうかの判定（DBのroleを見て判定）
+// ユーザー名簿の更新と管理者判定
 app.post('/api/sync_user', async (req, res) => {
     const { line_user_id, name } = req.body;
     try {
-        // 名前を更新。ただし既存のrole（管理者権限など）は消さずにキープする！
         await pool.query(`
             INSERT INTO users (line_user_id, name, role) VALUES ($1, $2, 'user')
             ON CONFLICT (line_user_id) DO UPDATE SET name = EXCLUDED.name
         `, [line_user_id, name]);
 
-        // データベースからこの人の role を確認する
         const userRes = await pool.query(
             "SELECT role FROM users WHERE line_user_id = $1", 
             [line_user_id]
         );
         const role = userRes.rows[0]?.role || 'user';
-        
-        // role が 'admin' なら管理者！
         const isAdmin = (role === 'admin');
 
         res.json({ success: true, isAdmin: isAdmin });
@@ -156,12 +150,11 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// 新しいお知らせを投稿（DBで管理者権限をチェック）
+// ★書き換え：お知らせ投稿（notify_type に応じてLINE通知を制御）
 app.post('/api/posts', async (req, res) => {
-    const { title, body, line_user_id } = req.body;
+    const { title, body, line_user_id, notify_type } = req.body;
 
     try {
-        // ★データベースで「この人はadminか？」を直接チェックする
         const userRes = await pool.query(
             "SELECT role FROM users WHERE line_user_id = $1", 
             [line_user_id]
@@ -174,12 +167,15 @@ app.post('/api/posts', async (req, res) => {
 
         if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
 
+        // 1. データベースに保存
         await pool.query("INSERT INTO posts (title, body) VALUES ($1, $2)", [title, body]);
 
+        // 2. LINE通知の制御
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
         const liffUrl = process.env.LIFF_URL;
 
-        if (token && liffUrl) {
+        // ★「none（通知しない）」以外で、設定が揃っていれば通知を送る！
+        if (notify_type !== 'none' && token && liffUrl) {
             const flexMessage = {
                 type: 'flex',
                 altText: `📢【連絡】${title}`,
@@ -217,7 +213,11 @@ app.post('/api/posts', async (req, res) => {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                 body: JSON.stringify({ messages: [flexMessage] })
             });
+            console.log('全員にLINE通知を送信しました');
+        } else {
+            console.log('LINE通知はスキップされました（掲示板のみ掲載）');
         }
+
         res.json({ success: true });
     } catch (err) {
         console.error('投稿エラー:', err);

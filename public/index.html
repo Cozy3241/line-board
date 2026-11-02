@@ -10,9 +10,8 @@
         .header { text-align: center; margin-bottom: 20px; }
         .user-name { color: #00b900; font-weight: bold; }
         
-        /* 投稿フォームのカード（最初は非表示にしておく） */
         .form-card {
-            display: none; /* ★初期状態では隠す */
+            display: none;
             background-color: white;
             border-radius: 8px;
             padding: 15px;
@@ -77,11 +76,23 @@
         </div>
     </div>
 
-    <!-- ★管理者だけに表示される投稿フォーム -->
+    <!-- 管理者専用投稿フォーム -->
     <div id="admin-form" class="form-card">
-        <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿（管理者専用）</h3>
+        <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿</h3>
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
         <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
+        
+        <!-- ★追加：LINE通知を送るかどうかの選択 -->
+        <div style="margin-bottom: 15px; font-size: 0.9rem; color: #444; background: #f0fdf4; padding: 10px; border-radius: 6px; border: 1px solid #bbf7d0;">
+            <strong style="display:block; margin-bottom: 6px;">🔔 LINEプッシュ通知の設定:</strong>
+            <label style="margin-right: 15px; cursor: pointer; display: inline-block; margin-bottom: 4px;">
+                <input type="radio" name="notify_type" value="broadcast" checked> 📢 全員に通知を送る
+            </label><br>
+            <label style="cursor: pointer; display: inline-block;">
+                <input type="radio" name="notify_type" value="none"> 🔕 送らない（掲示板のみ掲載）
+            </label>
+        </div>
+
         <button class="submit-btn" onclick="createPost()">投稿する</button>
     </div>
 
@@ -91,7 +102,7 @@
         let myLineUserId = "";
 
         async function main() {
-            await liff.init({ liffId: "2010518553-09VESXxS" }); // ※ID入れてください！
+            await liff.init({ liffId: "ここにあなたのLIFF IDを入れてください" }); // ※ID入れてください！
 
             if (!liff.isLoggedIn()) {
                 liff.login();
@@ -100,7 +111,6 @@
                 document.getElementById('name').innerText = profile.displayName;
                 myLineUserId = profile.userId;
 
-                // サーバーに登録＆管理者かどうかを確認
                 const syncRes = await fetch('/api/sync_user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -108,7 +118,6 @@
                 });
                 const syncData = await syncRes.json();
 
-                // ★追加：管理者なら「管理者バッジ」と「投稿フォーム」を表示する！
                 if (syncData.isAdmin) {
                     document.getElementById('admin-badge').style.display = 'inline';
                     document.getElementById('admin-form').style.display = 'block';
@@ -206,6 +215,9 @@
             const title = titleInput.value.trim();
             const body = bodyInput.value.trim();
 
+            // ★追加：どちらのラジオボタンが選ばれているか取得
+            const notifyType = document.querySelector('input[name="notify_type"]:checked').value;
+
             if (!title || !body) {
                 alert('タイトルと本文を入力してください');
                 return;
@@ -215,8 +227,13 @@
                 const response = await fetch('/api/posts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    // ★ line_user_id も一緒に送ってサーバー側で本人確認させる
-                    body: JSON.stringify({ title, body, line_user_id: myLineUserId })
+                    // ★ notify_type も一緒に送信！
+                    body: JSON.stringify({ 
+                        title, 
+                        body, 
+                        line_user_id: myLineUserId,
+                        notify_type: notifyType 
+                    })
                 });
 
                 if (response.ok) {
