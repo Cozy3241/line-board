@@ -10,7 +10,6 @@
         .header { text-align: center; margin-bottom: 20px; }
         .user-name { color: #00b900; font-weight: bold; }
         
-        /* お知らせカードのデザイン */
         .post-card {
             background-color: white;
             border-radius: 8px;
@@ -21,6 +20,26 @@
         .post-title { margin: 0 0 10px 0; font-size: 1.2rem; color: #333; }
         .post-body { margin: 0; color: #666; font-size: 0.95rem; }
         .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
+        
+        /* ★追加：読みましたボタンのデザイン */
+        .read-btn {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-top: 15px;
+            background-color: #00b900;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        /* 押した後のボタンのデザイン */
+        .read-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -32,62 +51,83 @@
         </div>
     </div>
 
-    <!-- お知らせが表示される場所 -->
-    <div id="posts-container">
-        <!-- ここにJavaScriptでお知らせが追加されます -->
-    </div>
+    <div id="posts-container"></div>
 
     <script>
+        // ★追加：自分のLINE IDを保存しておくための変数
+        let myLineUserId = "";
+
         async function main() {
-            // LIFFの初期化（あなたのLIFF IDを入れる）
-            await liff.init({ liffId: "2010518553-09VESXxS" });
+            await liff.init({ liffId: "ここにあなたのLIFF IDを入れてください" });
 
             if (!liff.isLoggedIn()) {
                 liff.login();
             } else {
-                // プロフィールを表示
                 const profile = await liff.getProfile();
                 document.getElementById('name').innerText = profile.displayName;
+                
+                // 自分のLINE IDを変数に保存
+                myLineUserId = profile.userId;
+
                 document.getElementById('loader').style.display = 'none';
                 document.getElementById('content').style.display = 'block';
 
-                // ★追加：お知らせをサーバーから取得して表示する
                 loadPosts();
             }
         }
 
-        // お知らせを取得する関数
         async function loadPosts() {
             try {
-                // サーバーの /api/posts にデータを取りに行く
                 const response = await fetch('/api/posts');
                 const posts = await response.json();
-                
                 const container = document.getElementById('posts-container');
                 
-                // データが空の場合
                 if (posts.length === 0) {
                     container.innerHTML = '<p style="text-align:center;">現在お知らせはありません。</p>';
                     return;
                 }
 
-                // 取得したお知らせを1つずつ画面に追加する
                 posts.forEach(post => {
-                    // 日付を見やすくする
                     const date = new Date(post.created_at).toLocaleString('ja-JP');
-                    
-                    // カードのHTMLを作る
                     const card = document.createElement('div');
                     card.className = 'post-card';
+                    // ★追加：ボタンのHTML（押したら markAsRead という関数が動く）
                     card.innerHTML = `
                         <h2 class="post-title">${post.title}</h2>
                         <p class="post-body">${post.body}</p>
                         <div class="post-date">${date}</div>
+                        <button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>
                     `;
                     container.appendChild(card);
                 });
             } catch (error) {
-                console.error('お知らせの取得に失敗しました', error);
+                console.error('取得失敗', error);
+            }
+        }
+
+        // ★追加：ボタンを押したときに動く機能
+        async function markAsRead(postId) {
+            const btn = document.getElementById(`btn-${postId}`);
+            
+            // サーバーに「読んだよ」データを送る
+            try {
+                const response = await fetch('/api/read', {
+                    method: 'POST', // データを送るときの方法
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        post_id: postId,
+                        line_user_id: myLineUserId
+                    })
+                });
+
+                if (response.ok) {
+                    // 成功したら、ボタンを灰色にして押せなくする
+                    btn.innerText = "既読済";
+                    btn.disabled = true;
+                }
+            } catch (error) {
+                console.error('送信エラー', error);
+                alert('エラーが発生しました。もう一度お試しください。');
             }
         }
 

@@ -1,22 +1,21 @@
 const express = require('express');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose(); // データベースを使うための準備
+const sqlite3 = require('sqlite3').verbose();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// publicフォルダを公開
+// ★追加：画面から送られてくるデータ（JSON）を受け取るための設定
+app.use(express.json());
 app.use(express.static('public'));
 
 // === データベースの設定 ===
-// 'database.sqlite'という名前のファイルにデータを保存します
 const db = new sqlite3.Database('./database.sqlite', (err) => {
     if (err) console.error('データベースを開けません:', err);
     else console.log('データベースに接続しました！');
 });
 
-// テーブル（データを整理して入れる表）の作成
 db.serialize(() => {
-    // もし'posts'という表がなければ作る（id, タイトル, 内容, 日付）
+    // お知らせを入れる箱（前回作成）
     db.run(`CREATE TABLE IF NOT EXISTS posts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT,
@@ -24,7 +23,17 @@ db.serialize(() => {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // テスト用に、最初から1件だけお知らせを入れておく
+    // ★追加：誰が読んだかを記録する箱（テーブル）
+    // UNIQUE をつけることで「同じ人が同じ記事のボタンを2回押しても、1回とカウントする」ようになります
+    db.run(`CREATE TABLE IF NOT EXISTS read_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER,
+        line_user_id TEXT,
+        read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(post_id, line_user_id)
+    )`);
+
+    // テストデータ
     db.get("SELECT COUNT(*) AS count FROM posts", (err, row) => {
         if (row.count === 0) {
             db.run(`INSERT INTO posts (title, body) VALUES ('システム公開のお知らせ', '社内掲示板のテスト運用を開始します。よろしくお願いします！')`);
@@ -33,19 +42,31 @@ db.serialize(() => {
 });
 // =========================
 
-// トップページを開いたとき
+// トップページ
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// スマホ（フロント側）から「お知らせ一覧ちょうだい！」と呼ばれたときに返す機能
+// お知らせ一覧を送る窓口
 app.get('/api/posts', (req, res) => {
     db.all("SELECT * FROM posts ORDER BY id DESC", (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
-        res.json(rows); // データベースのデータを送る
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows);
+    });
+});
+
+// ★追加：「読みました」を受け取って記録する窓口
+app.post('/api/read', (req, res) => {
+    // スマホの画面から「記事のID」と「読んだ人のLINE ID」が送られてきます
+    const postId = req.body.post_id;
+    const userId = req.body.line_user_id;
+
+    // データベースに記録する（INSERT OR IGNORE で、すでに記録があれば無視する）
+    db.run(`INSERT OR IGNORE INTO read_logs (post_id, line_user_id) VALUES (?, ?)`, 
+    [postId, userId], 
+    function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true, message: '既読を記録しました！' });
     });
 });
 
