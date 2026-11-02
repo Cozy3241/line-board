@@ -10,7 +10,6 @@
         .header { text-align: center; margin-bottom: 20px; }
         .user-name { color: #00b900; font-weight: bold; }
         
-        /* 投稿フォームのカード */
         .form-card {
             background-color: white;
             border-radius: 8px;
@@ -40,7 +39,6 @@
             cursor: pointer;
         }
 
-        /* お知らせカード */
         .post-card {
             background-color: white;
             border-radius: 8px;
@@ -77,7 +75,6 @@
         </div>
     </div>
 
-    <!-- ★追加：新しいお知らせを投稿するフォーム -->
     <div class="form-card">
         <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿</h3>
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
@@ -85,14 +82,13 @@
         <button class="submit-btn" onclick="createPost()">投稿する</button>
     </div>
 
-    <!-- お知らせ一覧が表示される場所 -->
     <div id="posts-container"></div>
 
     <script>
         let myLineUserId = "";
 
         async function main() {
-            await liff.init({ liffId: "2010518553-09VESXxS" });
+            await liff.init({ liffId: "2010518553-09VESXxS" }); // ※IDを入れてください！
 
             if (!liff.isLoggedIn()) {
                 liff.login();
@@ -104,10 +100,7 @@
                 await fetch('/api/sync_user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        line_user_id: profile.userId,
-                        name: profile.displayName
-                    })
+                    body: JSON.stringify({ line_user_id: profile.userId, name: profile.displayName })
                 });
 
                 document.getElementById('loader').style.display = 'none';
@@ -126,7 +119,7 @@
                 const readPostIds = await readResponse.json();
 
                 const container = document.getElementById('posts-container');
-                container.innerHTML = ''; // ★一覧を一度綺麗にリセットする
+                container.innerHTML = '';
                 
                 if (posts.length === 0) {
                     container.innerHTML = '<p style="text-align:center;">現在お知らせはありません。</p>';
@@ -141,8 +134,12 @@
                         ? `<button class="read-btn" disabled>既読済</button>`
                         : `<button class="read-btn" id="btn-${post.id}" onclick="markAsRead(${post.id})">読みました</button>`;
 
-                    const readersText = post.readers && post.readers.length > 0 ? post.readers.join(', ') : 'まだいません';
-                    const unreadersText = post.unreaders && post.unreaders.length > 0 ? post.unreaders.join(', ') : 'なし（全員既読！）';
+                    const readers = post.readers || [];
+                    const unreaders = post.unreaders || [];
+                    const readersText = readers.length > 0 ? readers.join(', ') : 'まだいません';
+                    const unreadersText = unreaders.length > 0 ? unreaders.join(', ') : 'なし（全員既読！）';
+                    const totalUsers = post.totalUsers || readers.length;
+                    const readRate = post.readRate !== undefined ? post.readRate : 0;
 
                     const card = document.createElement('div');
                     card.className = 'post-card';
@@ -152,17 +149,14 @@
                         <div class="post-date">${date}</div>
                         ${buttonHtml}
                         
-                        <!-- ★追加：既読状況と未読者リストの表示エリア -->
                         <div style="margin-top: 15px; font-size: 0.85rem; background-color: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
                             <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
-                                <strong>既読状況: ${post.readers.length} / ${post.totalUsers} 名</strong>
-                                <strong style="color: #0284c7;">${post.readRate}%</strong>
+                                <strong>既読状況: ${readers.length} / ${totalUsers} 名</strong>
+                                <strong style="color: #0284c7;">${readRate}%</strong>
                             </div>
-                            
                             <div style="margin-top: 8px; color: #16a34a;">
                                 <strong>✔ 読んだ人:</strong> ${readersText}
                             </div>
-                            
                             <div style="margin-top: 6px; color: #dc2626;">
                                 <strong>✖ 未読の人:</strong> ${unreadersText}
                             </div>
@@ -187,7 +181,7 @@
                 if (response.ok) {
                     btn.innerText = "既読済";
                     btn.disabled = true;
-                    loadPosts(); // 既読人数や名前を即座に更新する
+                    loadPosts();
                 }
             } catch (error) {
                 console.error('送信エラー', error);
@@ -195,7 +189,6 @@
             }
         }
 
-        // ★追加：投稿ボタンを押した時の機能
         async function createPost() {
             const titleInput = document.getElementById('new-title');
             const bodyInput = document.getElementById('new-body');
@@ -218,7 +211,7 @@
                     alert('投稿しました！');
                     titleInput.value = '';
                     bodyInput.value = '';
-                    loadPosts(); // 投稿後、自動でお知らせ一覧を更新する！
+                    loadPosts();
                 } else {
                     alert('投稿に失敗しました');
                 }
