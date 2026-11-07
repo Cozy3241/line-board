@@ -365,7 +365,17 @@
         let cachedPosts = [];
         let cachedReadPostIds = [];
         let commentFiles = {};
-        const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
+
+        // ★ 月曜日始まりの曜日定義（label: 表示名, dayNum: 0〜6の曜日番号）
+        const dayList = [
+            { label: '月', dayNum: '1' },
+            { label: '火', dayNum: '2' },
+            { label: '水', dayNum: '3' },
+            { label: '木', dayNum: '4' },
+            { label: '金', dayNum: '5' },
+            { label: '土', dayNum: '6' },
+            { label: '日', dayNum: '0' }
+        ];
 
         async function main() {
             try {
@@ -456,14 +466,14 @@
                     const isSelf = (u.line_user_id === myLineUserId);
                     const workDays = (u.work_days || '0,1,2,3,4,5,6').split(',');
 
-                    const daysHtml = dayLabels.map((label, index) => {
-                        const dayStr = String(index);
-                        const isWorking = workDays.includes(dayStr);
+                    // ★ 月曜日始まりでバッジを生成
+                    const daysHtml = dayList.map(item => {
+                        const isWorking = workDays.includes(item.dayNum);
                         return `
                             <span class="day-badge ${isWorking ? 'active' : ''}" 
-                                  onclick="toggleDay('${u.line_user_id}', '${dayStr}')" 
-                                  title="${label}曜日の勤務状態を切り替え">
-                                ${label}
+                                  onclick="toggleDay('${u.line_user_id}', '${item.dayNum}')" 
+                                  title="${item.label}曜日の勤務状態を切り替え">
+                                ${item.label}
                             </span>
                         `;
                     }).join('');
