@@ -39,10 +39,7 @@
             font-weight: bold;
             cursor: pointer;
         }
-        .submit-btn:disabled {
-            background-color: #94a3b8;
-            cursor: not-allowed;
-        }
+        .submit-btn:disabled { background-color: #94a3b8; cursor: not-allowed; }
 
         /* 検索バー用スタイル */
         .search-container {
@@ -130,13 +127,37 @@
         }
         .read-btn:disabled { background-color: #ccc; cursor: not-allowed; }
 
+        /* コメント用スタイル */
         .comment-item {
-            background: #f1f5f9; padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 0.85rem;
+            background: #f1f5f9; padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 0.85rem;
         }
-        .comment-user { font-weight: bold; color: #334155; margin-bottom: 2px; }
-        .comment-body { color: #1e293b; white-space: pre-wrap; }
+        .comment-user { font-weight: bold; color: #334155; margin-bottom: 3px; }
+        .comment-body { color: #1e293b; white-space: pre-wrap; word-break: break-word; }
         .comment-badge {
             background: #0284c7; color: white; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;
+        }
+        .comment-thumbnail-img {
+            max-width: 100%;
+            max-height: 180px;
+            border-radius: 4px;
+            margin-top: 6px;
+            display: block;
+            cursor: pointer;
+            border: 1px solid #cbd5e1;
+        }
+        .comment-pdf-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            padding: 6px 10px;
+            background: #ffffff;
+            border: 1px solid #fca5a5;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #b91c1c;
+            text-decoration: none;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -155,7 +176,7 @@
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
         <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
         
-        <!-- 📎 画像・PDF添付エリア -->
+        <!-- 📎 お知らせのファイル添付エリア -->
         <div style="margin-bottom: 15px; padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px;">
             <label style="display:block; font-weight:bold; font-size:0.85rem; color:#334155; margin-bottom: 6px;">
                 📎 写真またはPDFを添付（任意）
@@ -210,6 +231,8 @@
         let isCurrentUserAdmin = false;
         let cachedPosts = [];
         let cachedReadPostIds = [];
+        // 各投稿ごとの選択中コメント添付ファイルを保持するオブジェクト
+        let commentFiles = {};
 
         async function main() {
             try {
@@ -271,7 +294,7 @@
             }
         }
 
-        // ファイル選択時のプレビュー
+        // お知らせのファイル選択時プレビュー
         function previewSelectedFile() {
             const fileInput = document.getElementById('new-file');
             const file = fileInput.files[0];
@@ -305,7 +328,51 @@
             }
         }
 
-        // 🖼️ スマホ最適化：画像をCanvasで縮小・圧縮する関数
+        // コメントのファイル選択時プレビュー
+        function handleCommentFileChange(postId, input) {
+            const file = input.files[0];
+            const previewBox = document.getElementById(`comment-preview-box-${postId}`);
+            const previewImg = document.getElementById(`comment-preview-img-${postId}`);
+            const previewPdf = document.getElementById(`comment-preview-pdf-${postId}`);
+            const previewPdfName = document.getElementById(`comment-preview-pdf-name-${postId}`);
+            const qualityContainer = document.getElementById(`comment-quality-container-${postId}`);
+
+            if (!file) {
+                delete commentFiles[postId];
+                if (previewBox) previewBox.style.display = 'none';
+                return;
+            }
+
+            commentFiles[postId] = file;
+            if (previewBox) previewBox.style.display = 'block';
+
+            if (file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    previewImg.src = e.target.result;
+                    previewImg.style.display = 'block';
+                    previewPdf.style.display = 'none';
+                    qualityContainer.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            } else if (file.type === 'application/pdf') {
+                previewImg.style.display = 'none';
+                previewPdf.style.display = 'block';
+                previewPdfName.innerText = file.name;
+                qualityContainer.style.display = 'none';
+            }
+        }
+
+        // コメント添付ファイルのクリア
+        function clearCommentFile(postId) {
+            delete commentFiles[postId];
+            const input = document.getElementById(`comment-file-input-${postId}`);
+            if (input) input.value = '';
+            const previewBox = document.getElementById(`comment-preview-box-${postId}`);
+            if (previewBox) previewBox.style.display = 'none';
+        }
+
+        // 🖼️ スマホ最適化：Canvasで画像を縮小・圧縮
         async function compressImage(file, maxDimension = 1280, quality = 0.75) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
@@ -436,7 +503,7 @@
                 const totalUsers = post.totalUsers || readers.length;
                 const readRate = post.readRate !== undefined ? post.readRate : 0;
 
-                // 📎 添付ファイルの表示生成
+                // お知らせの添付表示
                 let attachmentHtml = '';
                 if (post.attachment_url) {
                     if (post.attachment_type === 'image') {
@@ -460,20 +527,43 @@
                     }
                 }
 
+                // コメント一覧の生成（添付ファイル対応）
                 const comments = post.comments || [];
                 let commentsHtml = '';
                 if (comments.length === 0) {
                     commentsHtml = '<p style="color:#94a3b8; font-size:0.8rem; margin:6px 0;">まだ質問やコメントはありません。</p>';
                 } else {
-                    commentsHtml = comments.map(c => `
-                        <div class="comment-item">
-                            <div class="comment-user">
-                                ${escapeHtml(c.name) || '名前未登録'}
-                                ${c.role === 'admin' ? '<span class="comment-badge">管理者</span>' : ''}
+                    commentsHtml = comments.map(c => {
+                        let commentAttachHtml = '';
+                        if (c.attachment_url) {
+                            if (c.attachment_type === 'image') {
+                                commentAttachHtml = `
+                                    <a href="${c.attachment_url}" target="_blank" rel="noopener noreferrer">
+                                        <img src="${c.attachment_url}" class="comment-thumbnail-img" alt="コメント添付写真">
+                                    </a>
+                                `;
+                            } else if (c.attachment_type === 'pdf') {
+                                commentAttachHtml = `
+                                    <a href="${c.attachment_url}" target="_blank" rel="noopener noreferrer" class="comment-pdf-link">
+                                        <span>📄</span>
+                                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px;">${escapeHtml(c.attachment_name || 'PDF資料')}</span>
+                                        <span>↗</span>
+                                    </a>
+                                `;
+                            }
+                        }
+
+                        return `
+                            <div class="comment-item">
+                                <div class="comment-user">
+                                    ${escapeHtml(c.name) || '名前未登録'}
+                                    ${c.role === 'admin' ? '<span class="comment-badge">管理者</span>' : ''}
+                                </div>
+                                ${c.body ? `<div class="comment-body">${escapeHtml(c.body)}</div>` : ''}
+                                ${commentAttachHtml}
                             </div>
-                            <div class="comment-body">${escapeHtml(c.body)}</div>
-                        </div>
-                    `).join('');
+                        `;
+                    }).join('');
                 }
 
                 const deleteBtnHtml = isCurrentUserAdmin 
@@ -507,6 +597,7 @@
                         </div>
                     </div>
 
+                    <!-- 💬 コメント欄 -->
                     <details id="details-${post.id}" style="margin-top: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px;">
                         <summary style="font-weight: bold; cursor: pointer; color: #0284c7; font-size: 0.9rem; outline: none;">
                             💬 質問・コメント (${comments.length}件)
@@ -514,9 +605,37 @@
                         <div style="margin-top: 10px;">
                             ${commentsHtml}
                             
-                            <div style="display: flex; gap: 6px; margin-top: 10px;">
-                                <input type="text" id="comment-input-${post.id}" placeholder="質問や返信を入力..." style="flex: 1; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem; box-sizing: border-box;">
-                                <button onclick="addComment(${post.id})" style="padding: 8px 12px; background: #0284c7; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 0.85rem; cursor: pointer;">送信</button>
+                            <!-- コメント入力エリア -->
+                            <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed #cbd5e1;">
+                                <div style="display: flex; gap: 6px;">
+                                    <input type="text" id="comment-input-${post.id}" placeholder="質問や返信を入力..." style="flex: 1; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem; box-sizing: border-box;">
+                                    <button id="comment-submit-btn-${post.id}" onclick="addComment(${post.id})" style="padding: 8px 14px; background: #0284c7; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 0.85rem; cursor: pointer; white-space:nowrap;">送信</button>
+                                </div>
+
+                                <!-- コメントのファイル添付ボタン -->
+                                <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between;">
+                                    <label for="comment-file-input-${post.id}" style="font-size: 0.8rem; color: #0284c7; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                                        📎 写真・PDFを添付
+                                    </label>
+                                    <input type="file" id="comment-file-input-${post.id}" accept="image/*,application/pdf" style="display: none;" onchange="handleCommentFileChange(${post.id}, this)">
+                                </div>
+
+                                <!-- コメント添付ファイルのプレビュー -->
+                                <div id="comment-preview-box-${post.id}" style="display: none; margin-top: 8px; padding: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                        <span style="font-size: 0.75rem; color: #64748b; font-weight: bold;">添付ファイル</span>
+                                        <button onclick="clearCommentFile(${post.id})" style="background: none; border: none; color: #ef4444; font-size: 0.75rem; cursor: pointer; font-weight: bold; padding: 0;">✕ 取消</button>
+                                    </div>
+                                    <img id="comment-preview-img-${post.id}" style="max-height: 80px; border-radius: 4px; display: none; border: 1px solid #cbd5e1;">
+                                    <div id="comment-preview-pdf-${post.id}" style="display: none; font-size: 0.8rem; color: #b91c1c; font-weight: bold;">
+                                        📄 <span id="comment-preview-pdf-name-${post.id}"></span>
+                                    </div>
+                                    <div id="comment-quality-container-${post.id}" style="margin-top: 4px; font-size: 0.75rem; color: #64748b;">
+                                        <label style="cursor: pointer;">
+                                            <input type="checkbox" id="comment-keep-original-${post.id}"> 💎 高画質で保存
+                                        </label>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </details>
@@ -590,56 +709,28 @@
             }
         }
 
+        // コメント送信処理（添付ファイル対応）
         async function addComment(postId) {
             const input = document.getElementById(`comment-input-${postId}`);
+            const submitBtn = document.getElementById(`comment-submit-btn-${postId}`);
             const body = input.value.trim();
-            if (!body) return;
+            const file = commentFiles[postId];
+            const keepOriginalCheckbox = document.getElementById(`comment-keep-original-${postId}`);
+            const keepOriginal = keepOriginalCheckbox ? keepOriginalCheckbox.checked : false;
 
-            try {
-                const response = await fetch('/api/comments', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ post_id: postId, line_user_id: myLineUserId, body: body })
-                });
-
-                if (response.ok) {
-                    input.value = '';
-                    await loadPosts();
-                    const details = document.getElementById(`details-${postId}`);
-                    if (details) details.open = true;
-                } else {
-                    alert('コメントの送信に失敗しました');
-                }
-            } catch (e) {
-                console.error(e);
-                alert('通信エラーが発生しました');
+            if (!body && !file) {
+                return alert('コメントまたはファイルを入力してください');
             }
-        }
-
-        // 新規投稿処理
-        async function createPost() {
-            const titleInput = document.getElementById('new-title');
-            const bodyInput = document.getElementById('new-body');
-            const fileInput = document.getElementById('new-file');
-            const submitBtn = document.getElementById('submit-post-btn');
-            const keepOriginal = document.getElementById('keep-original-quality').checked;
-            
-            const title = titleInput.value.trim();
-            const body = bodyInput.value.trim();
-            const notifyType = document.querySelector('input[name="notify_type"]:checked').value;
-            const file = fileInput.files[0];
-
-            if (!title || !body) return alert('タイトルと本文を入力してください');
 
             submitBtn.disabled = true;
-            submitBtn.innerText = '投稿中（アップロード中...）';
+            submitBtn.innerText = '送信中...';
 
             try {
                 let attachmentUrl = null;
                 let attachmentName = null;
                 let attachmentType = null;
 
-                // 添付ファイルがある場合、先にアップロード
+                // ファイルがある場合は先にアップロード
                 if (file) {
                     let fileData = '';
                     if (file.type.startsWith('image/')) {
@@ -674,7 +765,98 @@
                     attachmentType = uploadData.fileType;
                 }
 
-                // 記事投稿
+                // コメント送信
+                const response = await fetch('/api/comments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        post_id: postId,
+                        line_user_id: myLineUserId,
+                        body: body,
+                        attachment_url: attachmentUrl,
+                        attachment_name: attachmentName,
+                        attachment_type: attachmentType
+                    })
+                });
+
+                if (response.ok) {
+                    input.value = '';
+                    clearCommentFile(postId);
+                    await loadPosts();
+                    const details = document.getElementById(`details-${postId}`);
+                    if (details) details.open = true;
+                } else {
+                    const err = await response.json();
+                    alert(err.error || 'コメントの送信に失敗しました');
+                }
+            } catch (e) {
+                console.error(e);
+                alert(`エラー: ${e.message || '通信エラーが発生しました'}`);
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = '送信';
+                }
+            }
+        }
+
+        // 新規お知らせ投稿処理
+        async function createPost() {
+            const titleInput = document.getElementById('new-title');
+            const bodyInput = document.getElementById('new-body');
+            const fileInput = document.getElementById('new-file');
+            const submitBtn = document.getElementById('submit-post-btn');
+            const keepOriginal = document.getElementById('keep-original-quality').checked;
+            
+            const title = titleInput.value.trim();
+            const body = bodyInput.value.trim();
+            const notifyType = document.querySelector('input[name="notify_type"]:checked').value;
+            const file = fileInput.files[0];
+
+            if (!title || !body) return alert('タイトルと本文を入力してください');
+
+            submitBtn.disabled = true;
+            submitBtn.innerText = '投稿中（アップロード中...）';
+
+            try {
+                let attachmentUrl = null;
+                let attachmentName = null;
+                let attachmentType = null;
+
+                if (file) {
+                    let fileData = '';
+                    if (file.type.startsWith('image/')) {
+                        if (keepOriginal) {
+                            fileData = await readFileAsBase64(file);
+                        } else {
+                            fileData = await compressImage(file);
+                        }
+                    } else {
+                        fileData = await readFileAsBase64(file);
+                    }
+
+                    const uploadRes = await fetch('/api/upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            fileData: fileData,
+                            fileName: file.name,
+                            fileType: file.type || 'application/octet-stream',
+                            line_user_id: myLineUserId
+                        })
+                    });
+
+                    if (!uploadRes.ok) {
+                        const err = await uploadRes.json();
+                        throw new Error(err.error || 'ファイルのアップロードに失敗しました');
+                    }
+
+                    const uploadData = await uploadRes.json();
+                    attachmentUrl = uploadData.url;
+                    attachmentName = uploadData.fileName;
+                    attachmentType = uploadData.fileType;
+                }
+
                 const response = await fetch('/api/posts', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

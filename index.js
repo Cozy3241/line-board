@@ -28,7 +28,7 @@ async function initDB() {
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false
         `);
 
-        // 添付ファイル用カラムの自動追加
+        // お知らせ添付ファイル用カラム
         await pool.query(`
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_url TEXT;
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_name TEXT;
@@ -65,6 +65,13 @@ async function initDB() {
                 body TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        `);
+
+        // コメント添付ファイル用カラムの自動追加
+        await pool.query(`
+            ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+            ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_name TEXT;
+            ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_type TEXT;
         `);
 
         console.log('PostgreSQL（Supabase）に正常に接続・準備完了しました！');
@@ -105,14 +112,15 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// 📎 Supabase StorageへのファイルアップロードAPI
+// 📎 Supabase StorageへのファイルアップロードAPI（全登録スタッフ利用可能）
 app.post('/api/upload', async (req, res) => {
     const { fileData, fileName, fileType, line_user_id } = req.body;
 
     try {
+        // 登録ユーザーかどうかのチェック
         const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
-        if (userRes.rows[0]?.role !== 'admin') {
-            return res.status(403).json({ error: 'アップロード権限がありません（管理者のみ）' });
+        if (userRes.rows.length === 0) {
+            return res.status(403).json({ error: '認証されていないユーザーです' });
         }
 
         const rawUrl = process.env.SUPABASE_URL;
@@ -122,7 +130,7 @@ app.post('/api/upload', async (req, res) => {
             return res.status(500).json({ error: 'Renderの環境変数（SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）が未設定です。' });
         }
 
-        // ★ URLのクレンジング：末尾の / や /rest/v1 を自動で除去して純粋なオリジンにする
+        // URLのクレンジング（末尾の / や /rest/v1 を除去）
         let cleanBaseUrl = rawUrl.trim();
         cleanBaseUrl = cleanBaseUrl.replace(/\/rest\/v1\/?$/, '');
         cleanBaseUrl = cleanBaseUrl.replace(/\/+$/, '');
@@ -135,7 +143,7 @@ app.post('/api/upload', async (req, res) => {
         const ext = path.extname(fileName) || (fileType.includes('pdf') ? '.pdf' : '.jpg');
         const uniqueFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
 
-        // Supabase Storage REST API へ保存（クレンジング済みURLを使用）
+        // Supabase Storage REST API へ保存
         const uploadUrl = `${cleanBaseUrl}/storage/v1/object/attachments/${uniqueFileName}`;
         const uploadRes = await fetch(uploadUrl, {
             method: 'POST',
@@ -167,7 +175,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// お知らせ一覧
+// お知らせ一覧（コメントの添付情報も取得）
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
@@ -186,7 +194,7 @@ app.get('/api/posts', async (req, res) => {
         const logs = logsRes.rows;
 
         const commentsRes = await pool.query(`
-            SELECT c.id, c.post_id, c.body, c.created_at, u.name, u.role
+            SELECT c.id, c.post_id, c.body, c.created_at, c.attachment_url, c.attachment_name, c.attachment_type, u.name, u.role
             FROM comments c
             LEFT JOIN users u ON c.line_user_id = u.line_user_id
             ORDER BY c.id ASC
@@ -249,15 +257,20 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// コメント投稿
+// コメント投稿（添付ファイル対応 & LINE通知画像連携）
 app.post('/api/comments', async (req, res) => {
-    const { post_id, line_user_id, body } = req.body;
-    if (!body || !body.trim()) return res.status(400).json({ error: 'コメントを入力してください' });
+    const { post_id, line_user_id, body, attachment_url, attachment_name, attachment_type } = req.body;
+    
+    // 本文または添付のいずれかが必要
+    if ((!body || !body.trim()) && !attachment_url) {
+        return res.status(400).json({ error: 'コメントまたは添付ファイルを入力してください' });
+    }
 
     try {
         await pool.query(
-            "INSERT INTO comments (post_id, line_user_id, body) VALUES ($1, $2, $3)",
-            [post_id, line_user_id, body.trim()]
+            `INSERT INTO comments (post_id, line_user_id, body, attachment_url, attachment_name, attachment_type) 
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [post_id, line_user_id, (body || '').trim(), attachment_url || null, attachment_name || null, attachment_type || null]
         );
 
         const postRes = await pool.query("SELECT title FROM posts WHERE id = $1", [post_id]);
@@ -274,39 +287,67 @@ app.post('/api/comments', async (req, res) => {
 
         if (token && liffUrl && adminIds.length > 0) {
             const targetUrl = `${liffUrl}?postId=${post_id}`;
+            const bubbleContents = {
+                type: 'bubble',
+                header: {
+                    type: 'box',
+                    layout: 'vertical',
+                    contents: [
+                        { type: 'text', text: '💬 新しい質問・コメント', weight: 'bold', color: '#0284c7', size: 'sm' },
+                        { type: 'text', text: `対象: 【No.${post_id}】${postTitle}`, weight: 'bold', size: 'md', wrap: true, margin: 'sm' }
+                    ]
+                },
+                body: {
+                    type: 'box',
+                    layout: 'vertical',
+                    contents: [
+                        { type: 'text', text: `👤 投稿者: ${commenterName}`, weight: 'bold', size: 'sm', color: '#334155' }
+                    ]
+                },
+                footer: {
+                    type: 'box',
+                    layout: 'vertical',
+                    contents: [{
+                        type: 'button',
+                        style: 'primary',
+                        color: '#0284c7',
+                        height: 'sm',
+                        action: { type: 'uri', label: '確認して返信する', uri: targetUrl }
+                    }]
+                }
+            };
+
+            if (body && body.trim()) {
+                bubbleContents.body.contents.push({
+                    type: 'text', text: body.trim(), wrap: true, size: 'sm', color: '#64748b', margin: 'md'
+                });
+            }
+
+            // コメントに画像添付があればhero画像として通知カード上部に表示
+            if (attachment_url && attachment_type === 'image') {
+                bubbleContents.hero = {
+                    type: 'image',
+                    url: attachment_url,
+                    size: 'full',
+                    aspectRatio: '20:13',
+                    aspectMode: 'cover',
+                    action: { type: 'uri', uri: targetUrl }
+                };
+            } else if (attachment_url && attachment_type === 'pdf') {
+                bubbleContents.body.contents.push({
+                    type: 'text',
+                    text: '📄 添付資料（PDF）あり',
+                    weight: 'bold',
+                    color: '#dc2626',
+                    size: 'xs',
+                    margin: 'sm'
+                });
+            }
+
             const flexMessage = {
                 type: 'flex',
                 altText: `💬【質問】No.${post_id} ${commenterName}さんより`,
-                contents: {
-                    type: 'bubble',
-                    header: {
-                        type: 'box',
-                        layout: 'vertical',
-                        contents: [
-                            { type: 'text', text: '💬 新しい質問・コメント', weight: 'bold', color: '#0284c7', size: 'sm' },
-                            { type: 'text', text: `対象: 【No.${post_id}】${postTitle}`, weight: 'bold', size: 'md', wrap: true, margin: 'sm' }
-                        ]
-                    },
-                    body: {
-                        type: 'box',
-                        layout: 'vertical',
-                        contents: [
-                            { type: 'text', text: `👤 投稿者: ${commenterName}`, weight: 'bold', size: 'sm', color: '#334155' },
-                            { type: 'text', text: body.trim(), wrap: true, size: 'sm', color: '#64748b', margin: 'md' }
-                        ]
-                    },
-                    footer: {
-                        type: 'box',
-                        layout: 'vertical',
-                        contents: [{
-                            type: 'button',
-                            style: 'primary',
-                            color: '#0284c7',
-                            height: 'sm',
-                            action: { type: 'uri', label: '確認して返信する', uri: targetUrl }
-                        }]
-                    }
-                }
+                contents: bubbleContents
             };
 
             await fetch('https://api.line.me/v2/bot/message/multicast', {
@@ -323,7 +364,7 @@ app.post('/api/comments', async (req, res) => {
     }
 });
 
-// お知らせ新規投稿（添付ファイル情報対応 & Flex画像連携）
+// お知らせ新規投稿
 app.post('/api/posts', async (req, res) => {
     const { title, body, line_user_id, notify_type, attachment_url, attachment_name, attachment_type } = req.body;
 
