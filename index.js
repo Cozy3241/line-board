@@ -4,7 +4,8 @@ const { Pool } = require('pg');
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(express.json());
+// ファイルアップロード対応のためJSONサイズ制限を50MBに拡張
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
 const pool = new Pool({
@@ -25,6 +26,13 @@ async function initDB() {
 
         await pool.query(`
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false
+        `);
+
+        // 添付ファイル用カラムの自動追加
+        await pool.query(`
+            ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_url TEXT;
+            ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_name TEXT;
+            ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_type TEXT;
         `);
 
         await pool.query(`
@@ -97,7 +105,63 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// お知らせ一覧（論理削除されていないもののみ）
+// 📎 Supabase StorageへのファイルアップロードAPI
+app.post('/api/upload', async (req, res) => {
+    const { fileData, fileName, fileType, line_user_id } = req.body;
+
+    try {
+        const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
+        if (userRes.rows[0]?.role !== 'admin') {
+            return res.status(403).json({ error: 'アップロード権限がありません（管理者のみ）' });
+        }
+
+        const supabaseUrl = process.env.SUPABASE_URL;
+        const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+        if (!supabaseUrl || !supabaseKey) {
+            return res.status(500).json({ error: 'Renderの環境変数（SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）が未設定です。' });
+        }
+
+        // Base64をバイナリBufferに変換
+        const base64Content = fileData.split(';base64,').pop();
+        const buffer = Buffer.from(base64Content, 'base64');
+
+        // 重複しないファイル名を生成
+        const ext = path.extname(fileName) || (fileType.includes('pdf') ? '.pdf' : '.jpg');
+        const uniqueFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+
+        // Supabase Storage REST API へ直接保存
+        const uploadUrl = `${supabaseUrl}/storage/v1/object/attachments/${uniqueFileName}`;
+        const uploadRes = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Content-Type': fileType
+            },
+            body: buffer
+        });
+
+        if (!uploadRes.ok) {
+            const errText = await uploadRes.text();
+            throw new Error(`Supabase Storage 保存失敗: ${errText}`);
+        }
+
+        // 公開URLを生成
+        const publicUrl = `${supabaseUrl}/storage/v1/object/public/attachments/${uniqueFileName}`;
+
+        res.json({
+            success: true,
+            url: publicUrl,
+            fileName: fileName,
+            fileType: fileType.includes('pdf') ? 'pdf' : 'image'
+        });
+    } catch (err) {
+        console.error('アップロードエラー:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// お知らせ一覧
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
@@ -153,7 +217,7 @@ app.get('/api/posts', async (req, res) => {
     }
 });
 
-// 自分が読んだ記事IDリストの取得
+// 既読リスト取得
 app.get('/api/my_reads', async (req, res) => {
     const userId = req.query.line_user_id;
     try {
@@ -165,7 +229,7 @@ app.get('/api/my_reads', async (req, res) => {
     }
 });
 
-// 既読を記録する
+// 既読記録
 app.post('/api/read', async (req, res) => {
     const { post_id, line_user_id } = req.body;
     try {
@@ -253,9 +317,9 @@ app.post('/api/comments', async (req, res) => {
     }
 });
 
-// お知らせ投稿
+// お知らせ新規投稿（添付ファイル情報対応 & Flex画像連携）
 app.post('/api/posts', async (req, res) => {
-    const { title, body, line_user_id, notify_type } = req.body;
+    const { title, body, line_user_id, notify_type, attachment_url, attachment_name, attachment_type } = req.body;
 
     try {
         const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
@@ -267,8 +331,9 @@ app.post('/api/posts', async (req, res) => {
         if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
 
         const insertRes = await pool.query(
-            "INSERT INTO posts (title, body) VALUES ($1, $2) RETURNING id", 
-            [title, body]
+            `INSERT INTO posts (title, body, attachment_url, attachment_name, attachment_type) 
+             VALUES ($1, $2, $3, $4, $5) RETURNING id`, 
+            [title, body, attachment_url || null, attachment_name || null, attachment_type || null]
         );
         const newPostId = insertRes.rows[0].id;
 
@@ -277,36 +342,63 @@ app.post('/api/posts', async (req, res) => {
 
         if (notify_type !== 'none' && token && liffUrl) {
             const targetUrl = `${liffUrl}?postId=${newPostId}`;
+
+            // 画像がある場合はFlexカードの一番上に画像（hero）を配置
+            const bubbleContents = {
+                type: 'bubble',
+                header: {
+                    type: 'box',
+                    layout: 'vertical',
+                    contents: [
+                        { type: 'text', text: '社内掲示板', weight: 'bold', color: '#00b900', size: 'sm' },
+                        { type: 'text', text: `【No.${newPostId}】${title}`, weight: 'bold', size: 'lg', wrap: true, margin: 'md' }
+                    ]
+                },
+                body: {
+                    type: 'box',
+                    layout: 'vertical',
+                    contents: [
+                        { type: 'text', text: body, wrap: true, size: 'sm', color: '#666666' }
+                    ]
+                },
+                footer: {
+                    type: 'box',
+                    layout: 'vertical',
+                    contents: [{
+                        type: 'button',
+                        style: 'primary',
+                        color: '#00b900',
+                        height: 'sm',
+                        action: { type: 'uri', label: '確認して「読みました」を押す', uri: targetUrl }
+                    }]
+                }
+            };
+
+            // 画像添付があればhero画像を追加
+            if (attachment_url && attachment_type === 'image') {
+                bubbleContents.hero = {
+                    type: 'image',
+                    url: attachment_url,
+                    size: 'full',
+                    aspectRatio: '20:13',
+                    aspectMode: 'cover',
+                    action: { type: 'uri', uri: targetUrl }
+                };
+            } else if (attachment_url && attachment_type === 'pdf') {
+                bubbleContents.body.contents.push({
+                    type: 'text',
+                    text: '📄 添付資料（PDF）あり',
+                    weight: 'bold',
+                    color: '#dc2626',
+                    size: 'xs',
+                    margin: 'md'
+                });
+            }
+
             const flexMessage = {
                 type: 'flex',
                 altText: `📢【連絡 No.${newPostId}】${title}`,
-                contents: {
-                    type: 'bubble',
-                    header: {
-                        type: 'box',
-                        layout: 'vertical',
-                        contents: [
-                            { type: 'text', text: '社内掲示板', weight: 'bold', color: '#00b900', size: 'sm' },
-                            { type: 'text', text: `【No.${newPostId}】${title}`, weight: 'bold', size: 'lg', wrap: true, margin: 'md' }
-                        ]
-                    },
-                    body: {
-                        type: 'box',
-                        layout: 'vertical',
-                        contents: [{ type: 'text', text: body, wrap: true, size: 'sm', color: '#666666' }]
-                    },
-                    footer: {
-                        type: 'box',
-                        layout: 'vertical',
-                        contents: [{
-                            type: 'button',
-                            style: 'primary',
-                            color: '#00b900',
-                            height: 'sm',
-                            action: { type: 'uri', label: '確認して「読みました」を押す', uri: targetUrl }
-                        }]
-                    }
-                }
+                contents: bubbleContents
             };
 
             await fetch('https://api.line.me/v2/bot/message/broadcast', {
@@ -329,8 +421,7 @@ app.post('/api/posts/delete', async (req, res) => {
 
     try {
         const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
-        const role = userRes.rows[0]?.role || 'user';
-        if (role !== 'admin') {
+        if (userRes.rows[0]?.role !== 'admin') {
             return res.status(403).json({ error: '削除権限がありません（管理者のみ可能です）' });
         }
 
