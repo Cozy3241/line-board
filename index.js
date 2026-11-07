@@ -4,7 +4,6 @@ const { Pool } = require('pg');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// ファイルアップロード対応のためJSONサイズ制限を50MBに拡張
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static('public'));
 
@@ -28,7 +27,6 @@ async function initDB() {
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT false
         `);
 
-        // お知らせ添付ファイル用カラム
         await pool.query(`
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_url TEXT;
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_name TEXT;
@@ -57,6 +55,11 @@ async function initDB() {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'
         `);
 
+        // ★ 在籍・アクティブ状態フラグの自動追加（デフォルト: true）
+        await pool.query(`
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true
+        `);
+
         await pool.query(`
             CREATE TABLE IF NOT EXISTS comments (
                 id SERIAL PRIMARY KEY,
@@ -67,7 +70,6 @@ async function initDB() {
             )
         `);
 
-        // コメント添付ファイル用カラム
         await pool.query(`
             ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_url TEXT;
             ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_name TEXT;
@@ -85,34 +87,86 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// スマホに環境変数のLIFF IDを安全に渡す窓口
 app.get('/api/config', (req, res) => {
     res.json({ liffId: process.env.LIFF_ID });
 });
 
-// ユーザー名簿の更新と管理者判定
+// ユーザー名簿の同期（※既存ユーザーの role や is_active は勝手に上書きしない安全設計）
 app.post('/api/sync_user', async (req, res) => {
     const { line_user_id, name } = req.body;
     try {
         await pool.query(`
-            INSERT INTO users (line_user_id, name, role) VALUES ($1, $2, 'user')
+            INSERT INTO users (line_user_id, name, role, is_active) 
+            VALUES ($1, $2, 'user', true)
             ON CONFLICT (line_user_id) DO UPDATE SET name = EXCLUDED.name
         `, [line_user_id, name]);
 
         const userRes = await pool.query(
-            "SELECT role FROM users WHERE line_user_id = $1", 
+            "SELECT role, is_active FROM users WHERE line_user_id = $1", 
             [line_user_id]
         );
-        const role = userRes.rows[0]?.role || 'user';
-        const isAdmin = (role === 'admin');
+        const user = userRes.rows[0];
+        const isAdmin = (user?.role === 'admin');
 
-        res.json({ success: true, isAdmin: isAdmin });
+        res.json({ success: true, isAdmin: isAdmin, isActive: user?.is_active ?? true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// 📎 Supabase StorageへのファイルアップロードAPI
+// 👥 管理者用：スタッフ名簿一覧取得
+app.get('/api/admin/users', async (req, res) => {
+    const adminId = req.query.line_user_id;
+    try {
+        const check = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [adminId]);
+        if (check.rows[0]?.role !== 'admin') {
+            return res.status(403).json({ error: '管理者権限がありません' });
+        }
+
+        const usersRes = await pool.query("SELECT line_user_id, name, role, is_active FROM users ORDER BY role DESC, name ASC");
+        res.json(usersRes.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 👥 管理者用：在籍ステータス（アクティブ/停止）切り替え
+app.post('/api/admin/users/toggle_active', async (req, res) => {
+    const { admin_user_id, target_user_id, is_active } = req.body;
+    try {
+        const check = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [admin_user_id]);
+        if (check.rows[0]?.role !== 'admin') {
+            return res.status(403).json({ error: '管理者権限がありません' });
+        }
+
+        await pool.query("UPDATE users SET is_active = $1 WHERE line_user_id = $2", [is_active, target_user_id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 👥 管理者用：管理者権限の付与・剥奪切り替え
+app.post('/api/admin/users/toggle_role', async (req, res) => {
+    const { admin_user_id, target_user_id, new_role } = req.body;
+    try {
+        const check = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [admin_user_id]);
+        if (check.rows[0]?.role !== 'admin') {
+            return res.status(403).json({ error: '管理者権限がありません' });
+        }
+
+        if (admin_user_id === target_user_id && new_role !== 'admin') {
+            return res.status(400).json({ error: '自分自身の管理者権限を剥奪することはできません' });
+        }
+
+        await pool.query("UPDATE users SET role = $1 WHERE line_user_id = $2", [new_role, target_user_id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 📎 Supabase Storageへのファイルアップロード
 app.post('/api/upload', async (req, res) => {
     const { fileData, fileName, fileType, line_user_id } = req.body;
 
@@ -166,7 +220,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// お知らせ一覧（未読人数カウントも含む）
+// お知らせ一覧（★ is_active = true の在籍メンバーのみを母数・未読者として計算）
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
@@ -174,8 +228,9 @@ app.get('/api/posts', async (req, res) => {
 
         if (posts.length === 0) return res.json([]);
 
-        const usersRes = await pool.query("SELECT line_user_id, name FROM users");
-        const allUsers = usersRes.rows;
+        // 在籍中（アクティブ）のユーザーのみ取得
+        const usersRes = await pool.query("SELECT line_user_id, name FROM users WHERE is_active = true");
+        const activeUsers = usersRes.rows;
 
         const logsRes = await pool.query(`
             SELECT r.post_id, r.line_user_id, u.name 
@@ -197,11 +252,14 @@ app.get('/api/posts', async (req, res) => {
             const readUserIds = postLogs.map(log => log.line_user_id);
             const readers = postLogs.map(log => log.name || '名前未登録');
 
-            const unreadUsers = allUsers.filter(user => !readUserIds.includes(user.line_user_id));
+            // 在籍メンバーの中から未読者を抽出
+            const unreadUsers = activeUsers.filter(user => !readUserIds.includes(user.line_user_id));
             const unreaders = unreadUsers.map(user => user.name || '名前未登録');
 
-            const totalUsers = allUsers.length;
-            const readRate = totalUsers > 0 ? Math.round((readers.length / totalUsers) * 100) : 0;
+            const totalUsers = activeUsers.length;
+            // 既読率も在籍メンバー母数で計算
+            const activeReadCount = activeUsers.filter(user => readUserIds.includes(user.line_user_id)).length;
+            const readRate = totalUsers > 0 ? Math.round((activeReadCount / totalUsers) * 100) : 0;
             const postComments = allComments.filter(c => c.post_id === post.id);
 
             return {
@@ -248,28 +306,27 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// 🔔 未読者への再通知（リマインド）API
+// 🔔 未読者への再通知（★ 在籍中の未読スタッフにのみ送信）
 app.post('/api/posts/remind', async (req, res) => {
     const { post_id, line_user_id } = req.body;
 
     try {
-        // 管理者チェック
         const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
         if (userRes.rows[0]?.role !== 'admin') {
             return res.status(403).json({ error: 'リマインド権限がありません（管理者のみ可能です）' });
         }
 
-        // お知らせ情報を取得
         const postRes = await pool.query("SELECT title, body FROM posts WHERE id = $1 AND is_deleted = false", [post_id]);
         if (postRes.rows.length === 0) {
             return res.status(404).json({ error: 'お知らせが見つかりません' });
         }
         const post = postRes.rows[0];
 
-        // 未読者のLINE ID一覧を抽出
+        // 在籍中かつ未読の人のみ抽出
         const unreadUsersRes = await pool.query(`
             SELECT line_user_id FROM users 
-            WHERE line_user_id NOT IN (
+            WHERE is_active = true 
+            AND line_user_id NOT IN (
                 SELECT line_user_id FROM read_logs WHERE post_id = $1
             )
         `, [post_id]);
@@ -319,7 +376,6 @@ app.post('/api/posts/remind', async (req, res) => {
                 }
             };
 
-            // 未読者のみにMulticast送信
             await fetch('https://api.line.me/v2/bot/message/multicast', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -355,7 +411,8 @@ app.post('/api/comments', async (req, res) => {
         const userRes = await pool.query("SELECT name FROM users WHERE line_user_id = $1", [line_user_id]);
         const commenterName = userRes.rows[0]?.name || 'スタッフ';
 
-        const adminRes = await pool.query("SELECT line_user_id FROM users WHERE role = 'admin'");
+        // 在籍中の管理者のみに通知
+        const adminRes = await pool.query("SELECT line_user_id FROM users WHERE role = 'admin' AND is_active = true");
         const adminIds = adminRes.rows.map(r => r.line_user_id);
 
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;

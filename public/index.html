@@ -41,6 +41,23 @@
         }
         .submit-btn:disabled { background-color: #94a3b8; cursor: not-allowed; }
 
+        /* スタッフ名簿管理ボタン */
+        .member-manage-btn {
+            display: block;
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 12px;
+            background-color: #f1f5f9;
+            color: #334155;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            cursor: pointer;
+            text-align: center;
+        }
+        .member-manage-btn:hover { background-color: #e2e8f0; }
+
         /* 検索バー用スタイル */
         .search-container {
             background-color: white;
@@ -79,7 +96,6 @@
         .post-body { margin: 10px 0 0 0; color: #666; font-size: 0.95rem; white-space: pre-wrap; }
         .post-date { font-size: 0.8rem; color: #999; text-align: right; margin-top: 10px; }
         
-        /* 添付ファイル表示用スタイル */
         .attachment-thumbnail-container {
             margin-top: 12px;
             border-radius: 6px;
@@ -127,7 +143,6 @@
         }
         .read-btn:disabled { background-color: #ccc; cursor: not-allowed; }
 
-        /* リマインドボタン用スタイル */
         .remind-btn {
             display: inline-flex;
             align-items: center;
@@ -148,7 +163,6 @@
         .remind-btn:hover { background-color: #ffedd5; }
         .remind-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-        /* コメント用スタイル */
         .comment-item {
             background: #f1f5f9; padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 0.85rem;
         }
@@ -180,6 +194,59 @@
             text-decoration: none;
             font-weight: bold;
         }
+
+        /* 名簿管理モーダル（ポップアップ） */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 15px;
+            box-sizing: border-box;
+        }
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 500px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        .modal-header {
+            padding: 14px 16px;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-body {
+            padding: 12px 16px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .user-list-item {
+            padding: 10px 0;
+            border-bottom: 1px solid #f1f5f9;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        .status-active { background: #dcfce7; color: #15803d; }
+        .status-inactive { background: #f1f5f9; color: #64748b; }
     </style>
 </head>
 <body>
@@ -191,13 +258,14 @@
         </div>
     </div>
 
-    <!-- 管理者用投稿フォーム -->
+    <!-- 管理者用投稿フォーム & 名簿管理ボタン -->
     <div id="admin-form" class="form-card">
-        <h3 style="margin-top:0; color:#0284c7;">📢 新しいお知らせを投稿</h3>
+        <button class="member-manage-btn" onclick="openUserModal()">👥 スタッフ名簿の管理（在籍・権限）</button>
+
+        <h3 style="margin-top:5px; color:#0284c7;">📢 新しいお知らせを投稿</h3>
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
         <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
         
-        <!-- 📎 お知らせのファイル添付エリア -->
         <div style="margin-bottom: 15px; padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px;">
             <label style="display:block; font-weight:bold; font-size:0.85rem; color:#334155; margin-bottom: 6px;">
                 📎 写真またはPDFを添付（任意）
@@ -232,6 +300,25 @@
         </div>
 
         <button id="submit-post-btn" class="submit-btn" onclick="createPost()">投稿する</button>
+    </div>
+
+    <!-- 👥 スタッフ名簿管理モーダル -->
+    <div id="user-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 style="margin:0; font-size:1rem; color:#334155;">👥 スタッフ名簿の管理</h3>
+                <button onclick="closeUserModal()" style="border:none; background:none; font-size:1.2rem; cursor:pointer; color:#64748b;">✕</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.75rem; color:#64748b; margin-top:0;">
+                    ※退職・休職者を「停止」にすると、既読率の母数や未読者リマインドから自動除外されます。
+                </p>
+                <div id="user-list-container">読み込み中...</div>
+            </div>
+            <div style="padding: 10px 16px; background: #f8fafc; border-top: 1px solid #e2e8f0; text-align: right;">
+                <button onclick="closeUserModal()" style="padding: 6px 14px; background: #64748b; color: white; border: none; border-radius: 4px; font-size: 0.85rem; font-weight: bold; cursor: pointer;">閉じる</button>
+            </div>
+        </div>
     </div>
 
     <!-- 🔍 キーワード検索バー -->
@@ -311,6 +398,125 @@
                 handleSearch();
             } catch (error) {
                 console.error('取得失敗', error);
+            }
+        }
+
+        // 👥 名簿管理モーダルを開く
+        async function openUserModal() {
+            document.getElementById('user-modal').style.display = 'flex';
+            await loadUserList();
+        }
+
+        function closeUserModal() {
+            document.getElementById('user-modal').style.display = 'none';
+            loadPosts(); // 変更が既読率等に反映されるよう一覧を更新
+        }
+
+        // スタッフ一覧の読み込み
+        async function loadUserList() {
+            const container = document.getElementById('user-list-container');
+            container.innerHTML = '<p style="text-align:center; color:#64748b;">読み込み中...</p>';
+
+            try {
+                const res = await fetch(`/api/admin/users?line_user_id=${myLineUserId}`);
+                const users = await res.json();
+
+                if (users.length === 0) {
+                    container.innerHTML = '<p style="text-align:center;">登録メンバーがいません</p>';
+                    return;
+                }
+
+                container.innerHTML = users.map(u => {
+                    const isActive = u.is_active !== false;
+                    const isAdmin = (u.role === 'admin');
+                    const isSelf = (u.line_user_id === myLineUserId);
+
+                    return `
+                        <div class="user-list-item">
+                            <div>
+                                <div style="font-weight:bold; font-size:0.9rem; color:#1e293b;">
+                                    ${escapeHtml(u.name) || '名前未登録'}
+                                    ${isSelf ? '<span style="color:#0284c7; font-size:0.75rem;">(あなた)</span>' : ''}
+                                </div>
+                                <div style="margin-top:2px;">
+                                    <span class="status-badge ${isActive ? 'status-active' : 'status-inactive'}">
+                                        ${isActive ? '● 在籍中' : '○ 停止中'}
+                                    </span>
+                                    <span style="font-size:0.75rem; color:#64748b; margin-left:4px;">
+                                        ${isAdmin ? '🔑 管理者' : '一般'}
+                                    </span>
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:6px;">
+                                <button onclick="toggleUserActive('${u.line_user_id}', ${!isActive})" style="padding:4px 8px; font-size:0.75rem; border-radius:4px; border:1px solid #cbd5e1; background:${isActive ? '#fff' : '#f0fdf4'}; color:${isActive ? '#dc2626' : '#15803d'}; cursor:pointer; font-weight:bold;">
+                                    ${isActive ? '停止' : '再開'}
+                                </button>
+                                ${!isSelf ? `
+                                    <button onclick="toggleUserRole('${u.line_user_id}', '${isAdmin ? 'user' : 'admin'}')" style="padding:4px 8px; font-size:0.75rem; border-radius:4px; border:1px solid #cbd5e1; background:#fff; color:#0284c7; cursor:pointer;">
+                                        ${isAdmin ? '一般へ' : '管理者へ'}
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (err) {
+                console.error(err);
+                container.innerHTML = '<p style="color:#dc2626;">名簿の読み込みに失敗しました</p>';
+            }
+        }
+
+        // 在籍/停止の切り替え
+        async function toggleUserActive(targetUserId, willBeActive) {
+            const actionText = willBeActive ? '在籍中（アクティブ）' : '退職・休職（停止中）';
+            if (!confirm(`このスタッフを「${actionText}」に変更しますか？`)) return;
+
+            try {
+                const res = await fetch('/api/admin/users/toggle_active', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        admin_user_id: myLineUserId,
+                        target_user_id: targetUserId,
+                        is_active: willBeActive
+                    })
+                });
+
+                if (res.ok) {
+                    loadUserList();
+                } else {
+                    const err = await res.json();
+                    alert(err.error || '変更に失敗しました');
+                }
+            } catch (e) {
+                alert('通信エラーが発生しました');
+            }
+        }
+
+        // 権限の切り替え
+        async function toggleUserRole(targetUserId, newRole) {
+            const roleName = (newRole === 'admin') ? '管理者' : '一般スタッフ';
+            if (!confirm(`このスタッフの権限を「${roleName}」に変更しますか？`)) return;
+
+            try {
+                const res = await fetch('/api/admin/users/toggle_role', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        admin_user_id: myLineUserId,
+                        target_user_id: targetUserId,
+                        new_role: newRole
+                    })
+                });
+
+                if (res.ok) {
+                    loadUserList();
+                } else {
+                    const err = await res.json();
+                    alert(err.error || '変更に失敗しました');
+                }
+            } catch (e) {
+                alert('通信エラーが発生しました');
             }
         }
 
@@ -430,7 +636,6 @@
             });
         }
 
-        // 🔍 検索処理
         function handleSearch() {
             const searchInput = document.getElementById('search-input');
             const clearBtn = document.getElementById('search-clear-btn');
@@ -482,7 +687,6 @@
                 .replace(/'/g, '&#39;');
         }
 
-        // 投稿一覧の描画
         function renderPosts(posts) {
             const container = document.getElementById('posts-container');
             container.innerHTML = '';
@@ -520,7 +724,6 @@
                 const totalUsers = post.totalUsers || readers.length;
                 const readRate = post.readRate !== undefined ? post.readRate : 0;
 
-                // 🔔 管理者限定：未読リマインドボタンの生成
                 let remindBtnHtml = '';
                 if (isCurrentUserAdmin) {
                     if (unreadCount > 0) {
@@ -538,7 +741,6 @@
                     }
                 }
 
-                // お知らせ添付表示
                 let attachmentHtml = '';
                 if (post.attachment_url) {
                     if (post.attachment_type === 'image') {
@@ -562,7 +764,6 @@
                     }
                 }
 
-                // コメント一覧
                 const comments = post.comments || [];
                 let commentsHtml = '';
                 if (comments.length === 0) {
@@ -634,7 +835,6 @@
                         ${remindBtnHtml}
                     </div>
 
-                    <!-- 💬 コメント欄 -->
                     <details id="details-${post.id}" style="margin-top: 12px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px;">
                         <summary style="font-weight: bold; cursor: pointer; color: #0284c7; font-size: 0.9rem; outline: none;">
                             💬 質問・コメント (${comments.length}件)
@@ -678,7 +878,6 @@
             });
         }
 
-        // 🔔 未読リマインド送信処理
         async function sendRemind(postId, unreadCount) {
             const confirmed = confirm(`【No.${postId}】をまだ読んでいない ${unreadCount}名 のLINEに、未読リマインド通知を送信しますか？`);
             if (!confirmed) return;
@@ -778,7 +977,6 @@
             }
         }
 
-        // コメント送信処理
         async function addComment(postId) {
             const input = document.getElementById(`comment-input-${postId}`);
             const submitBtn = document.getElementById(`comment-submit-btn-${postId}`);
@@ -867,7 +1065,6 @@
             }
         }
 
-        // 新規お知らせ投稿処理
         async function createPost() {
             const titleInput = document.getElementById('new-title');
             const bodyInput = document.getElementById('new-body');
