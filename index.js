@@ -70,7 +70,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ★追加：スマホに環境変数のLIFF IDを安全に渡す窓口
+// スマホに環境変数のLIFF IDを安全に渡す窓口
 app.get('/api/config', (req, res) => {
     res.json({ liffId: process.env.LIFF_ID });
 });
