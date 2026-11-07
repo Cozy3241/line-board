@@ -12,6 +12,14 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+// 日本時間（JST）の現在の曜日番号（0:日, 1:月, ..., 6:土）を取得する関数
+function getJSTDayOfWeek() {
+    const now = new Date();
+    const jstString = now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
+    const jstDate = new Date(jstString);
+    return jstDate.getDay();
+}
+
 async function initDB() {
     try {
         await pool.query(`
@@ -52,12 +60,13 @@ async function initDB() {
         `);
 
         await pool.query(`
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user';
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
         `);
 
-        // ★ 在籍・アクティブ状態フラグの自動追加（デフォルト: true）
+        // ★ 勤務曜日カラムを追加（デフォルト: 全曜日 '0,1,2,3,4,5,6'）
         await pool.query(`
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS work_days TEXT DEFAULT '0,1,2,3,4,5,6';
         `);
 
         await pool.query(`
@@ -91,30 +100,35 @@ app.get('/api/config', (req, res) => {
     res.json({ liffId: process.env.LIFF_ID });
 });
 
-// ユーザー名簿の同期（※既存ユーザーの role や is_active は勝手に上書きしない安全設計）
+// ユーザー名簿の同期
 app.post('/api/sync_user', async (req, res) => {
     const { line_user_id, name } = req.body;
     try {
         await pool.query(`
-            INSERT INTO users (line_user_id, name, role, is_active) 
-            VALUES ($1, $2, 'user', true)
+            INSERT INTO users (line_user_id, name, role, is_active, work_days) 
+            VALUES ($1, $2, 'user', true, '0,1,2,3,4,5,6')
             ON CONFLICT (line_user_id) DO UPDATE SET name = EXCLUDED.name
         `, [line_user_id, name]);
 
         const userRes = await pool.query(
-            "SELECT role, is_active FROM users WHERE line_user_id = $1", 
+            "SELECT role, is_active, work_days FROM users WHERE line_user_id = $1", 
             [line_user_id]
         );
         const user = userRes.rows[0];
         const isAdmin = (user?.role === 'admin');
 
-        res.json({ success: true, isAdmin: isAdmin, isActive: user?.is_active ?? true });
+        res.json({ 
+            success: true, 
+            isAdmin: isAdmin, 
+            isActive: user?.is_active ?? true,
+            workDays: user?.work_days || '0,1,2,3,4,5,6'
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// 👥 管理者用：スタッフ名簿一覧取得
+// 👥 管理者用：スタッフ名簿一覧取得（勤務曜日情報含む）
 app.get('/api/admin/users', async (req, res) => {
     const adminId = req.query.line_user_id;
     try {
@@ -123,14 +137,14 @@ app.get('/api/admin/users', async (req, res) => {
             return res.status(403).json({ error: '管理者権限がありません' });
         }
 
-        const usersRes = await pool.query("SELECT line_user_id, name, role, is_active FROM users ORDER BY role DESC, name ASC");
+        const usersRes = await pool.query("SELECT line_user_id, name, role, is_active, work_days FROM users ORDER BY role DESC, name ASC");
         res.json(usersRes.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// 👥 管理者用：在籍ステータス（アクティブ/停止）切り替え
+// 👥 管理者用：在籍ステータス切り替え
 app.post('/api/admin/users/toggle_active', async (req, res) => {
     const { admin_user_id, target_user_id, is_active } = req.body;
     try {
@@ -146,7 +160,7 @@ app.post('/api/admin/users/toggle_active', async (req, res) => {
     }
 });
 
-// 👥 管理者用：管理者権限の付与・剥奪切り替え
+// 👥 管理者用：管理者権限の切り替え
 app.post('/api/admin/users/toggle_role', async (req, res) => {
     const { admin_user_id, target_user_id, new_role } = req.body;
     try {
@@ -160,6 +174,22 @@ app.post('/api/admin/users/toggle_role', async (req, res) => {
         }
 
         await pool.query("UPDATE users SET role = $1 WHERE line_user_id = $2", [new_role, target_user_id]);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 📅 管理者用：スタッフの勤務曜日を更新
+app.post('/api/admin/users/update_work_days', async (req, res) => {
+    const { admin_user_id, target_user_id, work_days } = req.body;
+    try {
+        const check = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [admin_user_id]);
+        if (check.rows[0]?.role !== 'admin') {
+            return res.status(403).json({ error: '管理者権限がありません' });
+        }
+
+        await pool.query("UPDATE users SET work_days = $1 WHERE line_user_id = $2", [work_days, target_user_id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -220,7 +250,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// お知らせ一覧（★ is_active = true の在籍メンバーのみを母数・未読者として計算）
+// お知らせ一覧
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
@@ -228,7 +258,6 @@ app.get('/api/posts', async (req, res) => {
 
         if (posts.length === 0) return res.json([]);
 
-        // 在籍中（アクティブ）のユーザーのみ取得
         const usersRes = await pool.query("SELECT line_user_id, name FROM users WHERE is_active = true");
         const activeUsers = usersRes.rows;
 
@@ -252,12 +281,10 @@ app.get('/api/posts', async (req, res) => {
             const readUserIds = postLogs.map(log => log.line_user_id);
             const readers = postLogs.map(log => log.name || '名前未登録');
 
-            // 在籍メンバーの中から未読者を抽出
             const unreadUsers = activeUsers.filter(user => !readUserIds.includes(user.line_user_id));
             const unreaders = unreadUsers.map(user => user.name || '名前未登録');
 
             const totalUsers = activeUsers.length;
-            // 既読率も在籍メンバー母数で計算
             const activeReadCount = activeUsers.filter(user => readUserIds.includes(user.line_user_id)).length;
             const readRate = totalUsers > 0 ? Math.round((activeReadCount / totalUsers) * 100) : 0;
             const postComments = allComments.filter(c => c.post_id === post.id);
@@ -306,7 +333,7 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// 🔔 未読者への再通知（★ 在籍中の未読スタッフにのみ送信）
+// 🔔 未読者への再通知（★ 本日出勤している未読スタッフにのみ送信）
 app.post('/api/posts/remind', async (req, res) => {
     const { post_id, line_user_id } = req.body;
 
@@ -322,19 +349,28 @@ app.post('/api/posts/remind', async (req, res) => {
         }
         const post = postRes.rows[0];
 
-        // 在籍中かつ未読の人のみ抽出
+        // 本日の日本時間の曜日番号
+        const currentJSTDay = String(getJSTDayOfWeek());
+
+        // 在籍中かつ未読のスタッフを取得
         const unreadUsersRes = await pool.query(`
-            SELECT line_user_id FROM users 
+            SELECT line_user_id, work_days FROM users 
             WHERE is_active = true 
             AND line_user_id NOT IN (
                 SELECT line_user_id FROM read_logs WHERE post_id = $1
             )
         `, [post_id]);
 
-        const unreadIds = unreadUsersRes.rows.map(r => r.line_user_id);
+        // 今日が勤務日になっているスタッフだけに絞り込み
+        const targetIds = unreadUsersRes.rows
+            .filter(u => {
+                const days = (u.work_days || '0,1,2,3,4,5,6').split(',');
+                return days.includes(currentJSTDay);
+            })
+            .map(u => u.line_user_id);
 
-        if (unreadIds.length === 0) {
-            return res.json({ success: true, count: 0, message: '全員が既読済みです！' });
+        if (targetIds.length === 0) {
+            return res.json({ success: true, count: 0, message: '本日出勤の未読者はいません（休日の未読者のみです）' });
         }
 
         const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
@@ -359,7 +395,7 @@ app.post('/api/posts/remind', async (req, res) => {
                         type: 'box',
                         layout: 'vertical',
                         contents: [
-                            { type: 'text', text: 'まだ確認されていない重要なお知らせです。内容を確認のうえ「読みました」を押してください。', wrap: true, size: 'xs', color: '#64748b' }
+                            { type: 'text', text: '本日出勤中のスタッフへ：まだ確認されていない重要連絡です。内容を確認のうえ「読みました」を押してください。', wrap: true, size: 'xs', color: '#64748b' }
                         ]
                     },
                     footer: {
@@ -379,11 +415,11 @@ app.post('/api/posts/remind', async (req, res) => {
             await fetch('https://api.line.me/v2/bot/message/multicast', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ to: unreadIds, messages: [flexMessage] })
+                body: JSON.stringify({ to: targetIds, messages: [flexMessage] })
             });
         }
 
-        res.json({ success: true, count: unreadIds.length });
+        res.json({ success: true, count: targetIds.length });
     } catch (err) {
         console.error('リマインド送信エラー:', err);
         res.status(500).json({ error: err.message });
@@ -411,7 +447,6 @@ app.post('/api/comments', async (req, res) => {
         const userRes = await pool.query("SELECT name FROM users WHERE line_user_id = $1", [line_user_id]);
         const commenterName = userRes.rows[0]?.name || 'スタッフ';
 
-        // 在籍中の管理者のみに通知
         const adminRes = await pool.query("SELECT line_user_id FROM users WHERE role = 'admin' AND is_active = true");
         const adminIds = adminRes.rows.map(r => r.line_user_id);
 
@@ -496,7 +531,7 @@ app.post('/api/comments', async (req, res) => {
     }
 });
 
-// お知らせ新規投稿
+// お知らせ新規投稿（★ 休日非通知 / 緊急全員通知 / 通知なし の3パターン制御）
 app.post('/api/posts', async (req, res) => {
     const { title, body, line_user_id, notify_type, attachment_url, attachment_name, attachment_type } = req.body;
 
@@ -528,7 +563,7 @@ app.post('/api/posts', async (req, res) => {
                     type: 'box',
                     layout: 'vertical',
                     contents: [
-                        { type: 'text', text: '社内掲示板', weight: 'bold', color: '#00b900', size: 'sm' },
+                        { type: 'text', text: notify_type === 'all' ? '🚨【緊急連絡】社内掲示板' : '社内掲示板', weight: 'bold', color: notify_type === 'all' ? '#dc2626' : '#00b900', size: 'sm' },
                         { type: 'text', text: `【No.${newPostId}】${title}`, weight: 'bold', size: 'lg', wrap: true, margin: 'md' }
                     ]
                 },
@@ -545,7 +580,7 @@ app.post('/api/posts', async (req, res) => {
                     contents: [{
                         type: 'button',
                         style: 'primary',
-                        color: '#00b900',
+                        color: notify_type === 'all' ? '#dc2626' : '#00b900',
                         height: 'sm',
                         action: { type: 'uri', label: '確認して「読みました」を押す', uri: targetUrl }
                     }]
@@ -578,11 +613,39 @@ app.post('/api/posts', async (req, res) => {
                 contents: bubbleContents
             };
 
-            await fetch('https://api.line.me/v2/bot/message/broadcast', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ messages: [flexMessage] })
-            });
+            // 送信対象の選定
+            if (notify_type === 'duty') {
+                // 📢 本日出勤スタッフのみ通知（休日は非通知）
+                const currentJSTDay = String(getJSTDayOfWeek());
+                const activeUsersRes = await pool.query("SELECT line_user_id, work_days FROM users WHERE is_active = true");
+                
+                const targetIds = activeUsersRes.rows
+                    .filter(u => {
+                        const days = (u.work_days || '0,1,2,3,4,5,6').split(',');
+                        return days.includes(currentJSTDay);
+                    })
+                    .map(u => u.line_user_id);
+
+                if (targetIds.length > 0) {
+                    await fetch('https://api.line.me/v2/bot/message/multicast', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                        body: JSON.stringify({ to: targetIds, messages: [flexMessage] })
+                    });
+                }
+            } else if (notify_type === 'all') {
+                // 🚨 休日も含め、在籍スタッフ全員に通知（緊急連絡）
+                const activeUsersRes = await pool.query("SELECT line_user_id FROM users WHERE is_active = true");
+                const targetIds = activeUsersRes.rows.map(u => u.line_user_id);
+
+                if (targetIds.length > 0) {
+                    await fetch('https://api.line.me/v2/bot/message/multicast', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                        body: JSON.stringify({ to: targetIds, messages: [flexMessage] })
+                    });
+                }
+            }
         }
 
         res.json({ success: true });
