@@ -67,7 +67,7 @@ async function initDB() {
             )
         `);
 
-        // コメント添付ファイル用カラムの自動追加
+        // コメント添付ファイル用カラム
         await pool.query(`
             ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_url TEXT;
             ALTER TABLE comments ADD COLUMN IF NOT EXISTS attachment_name TEXT;
@@ -112,12 +112,11 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// 📎 Supabase StorageへのファイルアップロードAPI（全登録スタッフ利用可能）
+// 📎 Supabase StorageへのファイルアップロードAPI
 app.post('/api/upload', async (req, res) => {
     const { fileData, fileName, fileType, line_user_id } = req.body;
 
     try {
-        // 登録ユーザーかどうかのチェック
         const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
         if (userRes.rows.length === 0) {
             return res.status(403).json({ error: '認証されていないユーザーです' });
@@ -130,20 +129,13 @@ app.post('/api/upload', async (req, res) => {
             return res.status(500).json({ error: 'Renderの環境変数（SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）が未設定です。' });
         }
 
-        // URLのクレンジング（末尾の / や /rest/v1 を除去）
-        let cleanBaseUrl = rawUrl.trim();
-        cleanBaseUrl = cleanBaseUrl.replace(/\/rest\/v1\/?$/, '');
-        cleanBaseUrl = cleanBaseUrl.replace(/\/+$/, '');
-
-        // Base64をバイナリBufferに変換
+        let cleanBaseUrl = rawUrl.trim().replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
         const base64Content = fileData.split(';base64,').pop();
         const buffer = Buffer.from(base64Content, 'base64');
 
-        // 重複しない英数字ファイル名を生成
         const ext = path.extname(fileName) || (fileType.includes('pdf') ? '.pdf' : '.jpg');
         const uniqueFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
 
-        // Supabase Storage REST API へ保存
         const uploadUrl = `${cleanBaseUrl}/storage/v1/object/attachments/${uniqueFileName}`;
         const uploadRes = await fetch(uploadUrl, {
             method: 'POST',
@@ -160,7 +152,6 @@ app.post('/api/upload', async (req, res) => {
             throw new Error(`Supabase Storage 保存失敗: ${errText}`);
         }
 
-        // 公開URLを生成
         const publicUrl = `${cleanBaseUrl}/storage/v1/object/public/attachments/${uniqueFileName}`;
 
         res.json({
@@ -175,7 +166,7 @@ app.post('/api/upload', async (req, res) => {
     }
 });
 
-// お知らせ一覧（コメントの添付情報も取得）
+// お知らせ一覧（未読人数カウントも含む）
 app.get('/api/posts', async (req, res) => {
     try {
         const postsRes = await pool.query("SELECT * FROM posts WHERE is_deleted = false ORDER BY id DESC");
@@ -206,9 +197,8 @@ app.get('/api/posts', async (req, res) => {
             const readUserIds = postLogs.map(log => log.line_user_id);
             const readers = postLogs.map(log => log.name || '名前未登録');
 
-            const unreaders = allUsers
-                .filter(user => !readUserIds.includes(user.line_user_id))
-                .map(user => user.name || '名前未登録');
+            const unreadUsers = allUsers.filter(user => !readUserIds.includes(user.line_user_id));
+            const unreaders = unreadUsers.map(user => user.name || '名前未登録');
 
             const totalUsers = allUsers.length;
             const readRate = totalUsers > 0 ? Math.round((readers.length / totalUsers) * 100) : 0;
@@ -218,6 +208,7 @@ app.get('/api/posts', async (req, res) => {
                 ...post,
                 readers: readers,
                 unreaders: unreaders,
+                unreadCount: unreadUsers.length,
                 readRate: readRate,
                 totalUsers: totalUsers,
                 comments: postComments
@@ -257,11 +248,96 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// コメント投稿（添付ファイル対応 & LINE通知画像連携）
+// 🔔 未読者への再通知（リマインド）API
+app.post('/api/posts/remind', async (req, res) => {
+    const { post_id, line_user_id } = req.body;
+
+    try {
+        // 管理者チェック
+        const userRes = await pool.query("SELECT role FROM users WHERE line_user_id = $1", [line_user_id]);
+        if (userRes.rows[0]?.role !== 'admin') {
+            return res.status(403).json({ error: 'リマインド権限がありません（管理者のみ可能です）' });
+        }
+
+        // お知らせ情報を取得
+        const postRes = await pool.query("SELECT title, body FROM posts WHERE id = $1 AND is_deleted = false", [post_id]);
+        if (postRes.rows.length === 0) {
+            return res.status(404).json({ error: 'お知らせが見つかりません' });
+        }
+        const post = postRes.rows[0];
+
+        // 未読者のLINE ID一覧を抽出
+        const unreadUsersRes = await pool.query(`
+            SELECT line_user_id FROM users 
+            WHERE line_user_id NOT IN (
+                SELECT line_user_id FROM read_logs WHERE post_id = $1
+            )
+        `, [post_id]);
+
+        const unreadIds = unreadUsersRes.rows.map(r => r.line_user_id);
+
+        if (unreadIds.length === 0) {
+            return res.json({ success: true, count: 0, message: '全員が既読済みです！' });
+        }
+
+        const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+        const liffUrl = process.env.LIFF_URL;
+
+        if (token && liffUrl) {
+            const targetUrl = `${liffUrl}?postId=${post_id}`;
+            const flexMessage = {
+                type: 'flex',
+                altText: `⚠️【未読リマインド】No.${post_id} ${post.title}`,
+                contents: {
+                    type: 'bubble',
+                    header: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            { type: 'text', text: '⚠️ 未読リマインド通知', weight: 'bold', color: '#ea580c', size: 'sm' },
+                            { type: 'text', text: `【No.${post_id}】${post.title}`, weight: 'bold', size: 'md', wrap: true, margin: 'sm' }
+                        ]
+                    },
+                    body: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [
+                            { type: 'text', text: 'まだ確認されていない重要なお知らせです。内容を確認のうえ「読みました」を押してください。', wrap: true, size: 'xs', color: '#64748b' }
+                        ]
+                    },
+                    footer: {
+                        type: 'box',
+                        layout: 'vertical',
+                        contents: [{
+                            type: 'button',
+                            style: 'primary',
+                            color: '#ea580c',
+                            height: 'sm',
+                            action: { type: 'uri', label: '今すぐ確認して「読みました」を押す', uri: targetUrl }
+                        }]
+                    }
+                }
+            };
+
+            // 未読者のみにMulticast送信
+            await fetch('https://api.line.me/v2/bot/message/multicast', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ to: unreadIds, messages: [flexMessage] })
+            });
+        }
+
+        res.json({ success: true, count: unreadIds.length });
+    } catch (err) {
+        console.error('リマインド送信エラー:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// コメント投稿
 app.post('/api/comments', async (req, res) => {
     const { post_id, line_user_id, body, attachment_url, attachment_name, attachment_type } = req.body;
     
-    // 本文または添付のいずれかが必要
     if ((!body || !body.trim()) && !attachment_url) {
         return res.status(400).json({ error: 'コメントまたは添付ファイルを入力してください' });
     }
@@ -323,7 +399,6 @@ app.post('/api/comments', async (req, res) => {
                 });
             }
 
-            // コメントに画像添付があればhero画像として通知カード上部に表示
             if (attachment_url && attachment_type === 'image') {
                 bubbleContents.hero = {
                     type: 'image',
@@ -340,7 +415,7 @@ app.post('/api/comments', async (req, res) => {
                     weight: 'bold',
                     color: '#dc2626',
                     size: 'xs',
-                    margin: 'sm'
+                    margin: 'md'
                 });
             }
 

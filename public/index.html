@@ -127,6 +127,27 @@
         }
         .read-btn:disabled { background-color: #ccc; cursor: not-allowed; }
 
+        /* リマインドボタン用スタイル */
+        .remind-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            width: 100%;
+            margin-top: 8px;
+            padding: 7px 12px;
+            background-color: #fff7ed;
+            border: 1px solid #fdba74;
+            color: #ea580c;
+            border-radius: 4px;
+            font-size: 0.82rem;
+            font-weight: bold;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        .remind-btn:hover { background-color: #ffedd5; }
+        .remind-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
         /* コメント用スタイル */
         .comment-item {
             background: #f1f5f9; padding: 10px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 0.85rem;
@@ -231,7 +252,6 @@
         let isCurrentUserAdmin = false;
         let cachedPosts = [];
         let cachedReadPostIds = [];
-        // 各投稿ごとの選択中コメント添付ファイルを保持するオブジェクト
         let commentFiles = {};
 
         async function main() {
@@ -294,7 +314,6 @@
             }
         }
 
-        // お知らせのファイル選択時プレビュー
         function previewSelectedFile() {
             const fileInput = document.getElementById('new-file');
             const file = fileInput.files[0];
@@ -328,7 +347,6 @@
             }
         }
 
-        // コメントのファイル選択時プレビュー
         function handleCommentFileChange(postId, input) {
             const file = input.files[0];
             const previewBox = document.getElementById(`comment-preview-box-${postId}`);
@@ -363,7 +381,6 @@
             }
         }
 
-        // コメント添付ファイルのクリア
         function clearCommentFile(postId) {
             delete commentFiles[postId];
             const input = document.getElementById(`comment-file-input-${postId}`);
@@ -372,7 +389,6 @@
             if (previewBox) previewBox.style.display = 'none';
         }
 
-        // 🖼️ スマホ最適化：Canvasで画像を縮小・圧縮
         async function compressImage(file, maxDimension = 1280, quality = 0.75) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
@@ -498,12 +514,31 @@
 
                 const readers = post.readers || [];
                 const unreaders = post.unreaders || [];
+                const unreadCount = post.unreadCount !== undefined ? post.unreadCount : unreaders.length;
                 const readersText = readers.length > 0 ? readers.join(', ') : 'まだいません';
                 const unreadersText = unreaders.length > 0 ? unreaders.join(', ') : 'なし（全員既読！）';
                 const totalUsers = post.totalUsers || readers.length;
                 const readRate = post.readRate !== undefined ? post.readRate : 0;
 
-                // お知らせの添付表示
+                // 🔔 管理者限定：未読リマインドボタンの生成
+                let remindBtnHtml = '';
+                if (isCurrentUserAdmin) {
+                    if (unreadCount > 0) {
+                        remindBtnHtml = `
+                            <button id="remind-btn-${post.id}" class="remind-btn" onclick="sendRemind(${post.id}, ${unreadCount})">
+                                🔔 未読者（${unreadCount}名）に再通知する
+                            </button>
+                        `;
+                    } else {
+                        remindBtnHtml = `
+                            <div style="margin-top: 8px; text-align: center; font-size: 0.8rem; color: #16a34a; font-weight: bold; background: #f0fdf4; padding: 6px; border-radius: 4px; border: 1px solid #bbf7d0;">
+                                🎉 全員が既読済みです！
+                            </div>
+                        `;
+                    }
+                }
+
+                // お知らせ添付表示
                 let attachmentHtml = '';
                 if (post.attachment_url) {
                     if (post.attachment_type === 'image') {
@@ -527,7 +562,7 @@
                     }
                 }
 
-                // コメント一覧の生成（添付ファイル対応）
+                // コメント一覧
                 const comments = post.comments || [];
                 let commentsHtml = '';
                 if (comments.length === 0) {
@@ -595,6 +630,8 @@
                         <div style="margin-top: 6px; color: #dc2626;">
                             <strong>✖ 未読の人:</strong> ${escapeHtml(unreadersText)}
                         </div>
+
+                        ${remindBtnHtml}
                     </div>
 
                     <!-- 💬 コメント欄 -->
@@ -605,14 +642,12 @@
                         <div style="margin-top: 10px;">
                             ${commentsHtml}
                             
-                            <!-- コメント入力エリア -->
                             <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed #cbd5e1;">
                                 <div style="display: flex; gap: 6px;">
                                     <input type="text" id="comment-input-${post.id}" placeholder="質問や返信を入力..." style="flex: 1; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.85rem; box-sizing: border-box;">
                                     <button id="comment-submit-btn-${post.id}" onclick="addComment(${post.id})" style="padding: 8px 14px; background: #0284c7; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 0.85rem; cursor: pointer; white-space:nowrap;">送信</button>
                                 </div>
 
-                                <!-- コメントのファイル添付ボタン -->
                                 <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between;">
                                     <label for="comment-file-input-${post.id}" style="font-size: 0.8rem; color: #0284c7; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
                                         📎 写真・PDFを添付
@@ -620,7 +655,6 @@
                                     <input type="file" id="comment-file-input-${post.id}" accept="image/*,application/pdf" style="display: none;" onchange="handleCommentFileChange(${post.id}, this)">
                                 </div>
 
-                                <!-- コメント添付ファイルのプレビュー -->
                                 <div id="comment-preview-box-${post.id}" style="display: none; margin-top: 8px; padding: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px;">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                                         <span style="font-size: 0.75rem; color: #64748b; font-weight: bold;">添付ファイル</span>
@@ -642,6 +676,41 @@
                 `;
                 container.appendChild(card);
             });
+        }
+
+        // 🔔 未読リマインド送信処理
+        async function sendRemind(postId, unreadCount) {
+            const confirmed = confirm(`【No.${postId}】をまだ読んでいない ${unreadCount}名 のLINEに、未読リマインド通知を送信しますか？`);
+            if (!confirmed) return;
+
+            const btn = document.getElementById(`remind-btn-${postId}`);
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = 'リマインド送信中...';
+            }
+
+            try {
+                const response = await fetch('/api/posts/remind', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ post_id: postId, line_user_id: myLineUserId })
+                });
+
+                const data = await response.json();
+                if (response.ok) {
+                    alert(`📢 未読者 ${data.count}名 にリマインドLINEを送信しました！`);
+                } else {
+                    alert(data.error || 'リマインド送信に失敗しました');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('通信エラーが発生しました');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = `🔔 未読者（${unreadCount}名）に再通知する`;
+                }
+            }
         }
 
         async function deletePost(postId) {
@@ -709,7 +778,7 @@
             }
         }
 
-        // コメント送信処理（添付ファイル対応）
+        // コメント送信処理
         async function addComment(postId) {
             const input = document.getElementById(`comment-input-${postId}`);
             const submitBtn = document.getElementById(`comment-submit-btn-${postId}`);
@@ -730,7 +799,6 @@
                 let attachmentName = null;
                 let attachmentType = null;
 
-                // ファイルがある場合は先にアップロード
                 if (file) {
                     let fileData = '';
                     if (file.type.startsWith('image/')) {
@@ -765,7 +833,6 @@
                     attachmentType = uploadData.fileType;
                 }
 
-                // コメント送信
                 const response = await fetch('/api/comments', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
