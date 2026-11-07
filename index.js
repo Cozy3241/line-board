@@ -12,7 +12,7 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// 日本時間（JST）の現在の曜日番号（0:日, 1:月, ..., 6:土）を取得する関数
+// 日本時間（JST）の現在の曜日番号（0:日, 1:月, ..., 6:土）を取得
 function getJSTDayOfWeek() {
     const now = new Date();
     const jstString = now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' });
@@ -62,10 +62,6 @@ async function initDB() {
         await pool.query(`
             ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user';
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
-        `);
-
-        // ★ 勤務曜日カラムを追加（デフォルト: 全曜日 '0,1,2,3,4,5,6'）
-        await pool.query(`
             ALTER TABLE users ADD COLUMN IF NOT EXISTS work_days TEXT DEFAULT '0,1,2,3,4,5,6';
         `);
 
@@ -128,7 +124,7 @@ app.post('/api/sync_user', async (req, res) => {
     }
 });
 
-// 👥 管理者用：スタッフ名簿一覧取得（勤務曜日情報含む）
+// 👥 管理者用：スタッフ名簿一覧取得
 app.get('/api/admin/users', async (req, res) => {
     const adminId = req.query.line_user_id;
     try {
@@ -333,7 +329,7 @@ app.post('/api/read', async (req, res) => {
     }
 });
 
-// 🔔 未読者への再通知（★ 本日出勤している未読スタッフにのみ送信）
+// 🔔 未読者への再通知（本日出勤の未読者のみ）
 app.post('/api/posts/remind', async (req, res) => {
     const { post_id, line_user_id } = req.body;
 
@@ -349,10 +345,8 @@ app.post('/api/posts/remind', async (req, res) => {
         }
         const post = postRes.rows[0];
 
-        // 本日の日本時間の曜日番号
         const currentJSTDay = String(getJSTDayOfWeek());
 
-        // 在籍中かつ未読のスタッフを取得
         const unreadUsersRes = await pool.query(`
             SELECT line_user_id, work_days FROM users 
             WHERE is_active = true 
@@ -361,7 +355,6 @@ app.post('/api/posts/remind', async (req, res) => {
             )
         `, [post_id]);
 
-        // 今日が勤務日になっているスタッフだけに絞り込み
         const targetIds = unreadUsersRes.rows
             .filter(u => {
                 const days = (u.work_days || '0,1,2,3,4,5,6').split(',');
@@ -531,7 +524,7 @@ app.post('/api/comments', async (req, res) => {
     }
 });
 
-// お知らせ新規投稿（★ 休日非通知 / 緊急全員通知 / 通知なし の3パターン制御）
+// お知らせ新規投稿
 app.post('/api/posts', async (req, res) => {
     const { title, body, line_user_id, notify_type, attachment_url, attachment_name, attachment_type } = req.body;
 
@@ -613,9 +606,7 @@ app.post('/api/posts', async (req, res) => {
                 contents: bubbleContents
             };
 
-            // 送信対象の選定
             if (notify_type === 'duty') {
-                // 📢 本日出勤スタッフのみ通知（休日は非通知）
                 const currentJSTDay = String(getJSTDayOfWeek());
                 const activeUsersRes = await pool.query("SELECT line_user_id, work_days FROM users WHERE is_active = true");
                 
@@ -634,7 +625,6 @@ app.post('/api/posts', async (req, res) => {
                     });
                 }
             } else if (notify_type === 'all') {
-                // 🚨 休日も含め、在籍スタッフ全員に通知（緊急連絡）
                 const activeUsersRes = await pool.query("SELECT line_user_id FROM users WHERE is_active = true");
                 const targetIds = activeUsersRes.rows.map(u => u.line_user_id);
 
