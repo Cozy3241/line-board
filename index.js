@@ -115,12 +115,17 @@ app.post('/api/upload', async (req, res) => {
             return res.status(403).json({ error: 'アップロード権限がありません（管理者のみ）' });
         }
 
-        const supabaseUrl = process.env.SUPABASE_URL;
+        const rawUrl = process.env.SUPABASE_URL;
         const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-        if (!supabaseUrl || !supabaseKey) {
+        if (!rawUrl || !supabaseKey) {
             return res.status(500).json({ error: 'Renderの環境変数（SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY）が未設定です。' });
         }
+
+        // ★ URLのクレンジング：末尾の / や /rest/v1 を自動で除去して純粋なオリジンにする
+        let cleanBaseUrl = rawUrl.trim();
+        cleanBaseUrl = cleanBaseUrl.replace(/\/rest\/v1\/?$/, '');
+        cleanBaseUrl = cleanBaseUrl.replace(/\/+$/, '');
 
         // Base64をバイナリBufferに変換
         const base64Content = fileData.split(';base64,').pop();
@@ -130,8 +135,8 @@ app.post('/api/upload', async (req, res) => {
         const ext = path.extname(fileName) || (fileType.includes('pdf') ? '.pdf' : '.jpg');
         const uniqueFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
 
-        // Supabase Storage REST API へ保存（apikey と Authorization の両方を付与）
-        const uploadUrl = `${supabaseUrl}/storage/v1/object/attachments/${uniqueFileName}`;
+        // Supabase Storage REST API へ保存（クレンジング済みURLを使用）
+        const uploadUrl = `${cleanBaseUrl}/storage/v1/object/attachments/${uniqueFileName}`;
         const uploadRes = await fetch(uploadUrl, {
             method: 'POST',
             headers: {
@@ -148,7 +153,7 @@ app.post('/api/upload', async (req, res) => {
         }
 
         // 公開URLを生成
-        const publicUrl = `${supabaseUrl}/storage/v1/object/public/attachments/${uniqueFileName}`;
+        const publicUrl = `${cleanBaseUrl}/storage/v1/object/public/attachments/${uniqueFileName}`;
 
         res.json({
             success: true,
@@ -374,7 +379,6 @@ app.post('/api/posts', async (req, res) => {
                 }
             };
 
-            // 画像添付があればFlexカード上部に画像（hero）を追加
             if (attachment_url && attachment_type === 'image') {
                 bubbleContents.hero = {
                     type: 'image',
