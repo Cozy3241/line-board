@@ -126,15 +126,16 @@ app.post('/api/upload', async (req, res) => {
         const base64Content = fileData.split(';base64,').pop();
         const buffer = Buffer.from(base64Content, 'base64');
 
-        // 重複しないファイル名を生成
+        // 重複しない英数字ファイル名を生成
         const ext = path.extname(fileName) || (fileType.includes('pdf') ? '.pdf' : '.jpg');
         const uniqueFileName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
 
-        // Supabase Storage REST API へ直接保存
+        // Supabase Storage REST API へ保存（apikey と Authorization の両方を付与）
         const uploadUrl = `${supabaseUrl}/storage/v1/object/attachments/${uniqueFileName}`;
         const uploadRes = await fetch(uploadUrl, {
             method: 'POST',
             headers: {
+                'apikey': supabaseKey,
                 'Authorization': `Bearer ${supabaseKey}`,
                 'Content-Type': fileType
             },
@@ -343,7 +344,6 @@ app.post('/api/posts', async (req, res) => {
         if (notify_type !== 'none' && token && liffUrl) {
             const targetUrl = `${liffUrl}?postId=${newPostId}`;
 
-            // 画像がある場合はFlexカードの一番上に画像（hero）を配置
             const bubbleContents = {
                 type: 'bubble',
                 header: {
@@ -374,7 +374,7 @@ app.post('/api/posts', async (req, res) => {
                 }
             };
 
-            // 画像添付があればhero画像を追加
+            // 画像添付があればFlexカード上部に画像（hero）を追加
             if (attachment_url && attachment_type === 'image') {
                 bubbleContents.hero = {
                     type: 'image',
