@@ -39,6 +39,7 @@ async function initDB() {
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_url TEXT;
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_name TEXT;
             ALTER TABLE posts ADD COLUMN IF NOT EXISTS attachment_type TEXT;
+            ALTER TABLE posts ADD COLUMN IF NOT EXISTS target_user_count INTEGER;
         `);
 
         await pool.query(`
@@ -277,12 +278,15 @@ app.get('/api/posts', async (req, res) => {
             const readUserIds = postLogs.map(log => log.line_user_id);
             const readers = postLogs.map(log => log.name || '名前未登録');
 
+            // 現在のアクティブユーザーの中で未読の人（後から入った新人も含む）
             const unreadUsers = activeUsers.filter(user => !readUserIds.includes(user.line_user_id));
             const unreaders = unreadUsers.map(user => user.name || '名前未登録');
 
-            const totalUsers = activeUsers.length;
-            const activeReadCount = activeUsers.filter(user => readUserIds.includes(user.line_user_id)).length;
-            const readRate = totalUsers > 0 ? Math.round((activeReadCount / totalUsers) * 100) : 0;
+            // ★ 母数は「投稿時のスナップショット人数」。既存ログ等でnullの場合は現在のアクティブ人数を使用
+            const targetCount = post.target_user_count ? post.target_user_count : (activeUsers.length || 1);
+            
+            // 既読率は「投稿時の対象人数」に対する読んだ人の割合（100%上限）
+            const readRate = Math.min(100, Math.round((readers.length / targetCount) * 100));
             const postComments = allComments.filter(c => c.post_id === post.id);
 
             return {
@@ -291,7 +295,7 @@ app.get('/api/posts', async (req, res) => {
                 unreaders: unreaders,
                 unreadCount: unreadUsers.length,
                 readRate: readRate,
-                totalUsers: totalUsers,
+                totalUsers: targetCount, // 投稿時の母数
                 comments: postComments
             };
         });
@@ -537,10 +541,14 @@ app.post('/api/posts', async (req, res) => {
 
         if (!title || !body) return res.status(400).json({ error: 'タイトルと本文を入力してください' });
 
+        // ★ 投稿時点のアクティブユーザー数をカウントしてスナップショットとして固定保存
+        const countRes = await pool.query("SELECT COUNT(*) FROM users WHERE is_active = true");
+        const currentActiveCount = parseInt(countRes.rows[0].count, 10) || 1;
+
         const insertRes = await pool.query(
-            `INSERT INTO posts (title, body, attachment_url, attachment_name, attachment_type) 
-             VALUES ($1, $2, $3, $4, $5) RETURNING id`, 
-            [title, body, attachment_url || null, attachment_name || null, attachment_type || null]
+            `INSERT INTO posts (title, body, attachment_url, attachment_name, attachment_type, target_user_count) 
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, 
+            [title, body, attachment_url || null, attachment_name || null, attachment_type || null, currentActiveCount]
         );
         const newPostId = insertRes.rows[0].id;
 
