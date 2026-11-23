@@ -57,6 +57,28 @@
         }
         .member-manage-btn:hover { background-color: #e2e8f0; }
 
+        /* アップロード用ボタンスタイル */
+        .upload-buttons-container {
+            display: flex;
+            gap: 8px;
+        }
+        .upload-btn {
+            flex: 1;
+            padding: 8px 10px;
+            background-color: #ffffff;
+            color: #0284c7;
+            border: 1px solid #0284c7;
+            border-radius: 5px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+        }
+        .upload-btn:hover { background-color: #f0f9ff; }
+
         /* 検索バー用スタイル */
         .search-container {
             background-color: white;
@@ -325,14 +347,31 @@
         <input type="text" id="new-title" class="form-input" placeholder="タイトル（例：明日のミーティング）">
         <textarea id="new-body" class="form-input" rows="3" placeholder="連絡内容を入力してください..."></textarea>
         
-        <div style="margin-bottom: 15px; padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px;">
-            <label style="display:block; font-weight:bold; font-size:0.85rem; color:#334155; margin-bottom: 6px;">
-                📎 写真またはPDFを添付（任意）
+        <div style="margin-bottom: 15px; padding: 12px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px;">
+            <label style="display:block; font-weight:bold; font-size:0.85rem; color:#334155; margin-bottom: 8px;">
+                📎 写真・PDF・カメラ撮影（任意）
             </label>
-            <input type="file" id="new-file" accept="image/*,application/pdf" style="font-size:0.85rem; width:100%;" onchange="previewSelectedFile()">
+            
+            <!-- カメラ撮影 / アルバム・PDF選択ボタン -->
+            <div class="upload-buttons-container">
+                <button type="button" class="upload-btn" onclick="triggerPostFileSelect('camera')">
+                    📷 写真を撮影
+                </button>
+                <button type="button" class="upload-btn" onclick="triggerPostFileSelect('library')">
+                    📁 写真・PDFを選択
+                </button>
+            </div>
+            <!-- スマホのカメラを直接起動するinput -->
+            <input type="file" id="new-file-camera" accept="image/*" capture="environment" style="display:none;" onchange="handlePostFileChange(this)">
+            <!-- ファイルライブラリ/アルバム用のinput -->
+            <input type="file" id="new-file-library" accept="image/*,application/pdf" style="display:none;" onchange="handlePostFileChange(this)">
             
             <div id="file-preview-area" style="display:none; margin-top:10px;">
-                <img id="preview-img" style="max-height:140px; border-radius:4px; display:none; border:1px solid #ddd;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <span style="font-size:0.75rem; color:#64748b; font-weight:bold;">選択された添付ファイル</span>
+                    <button type="button" onclick="clearPostFile()" style="background:none; border:none; color:#ef4444; font-size:0.8rem; cursor:pointer; font-weight:bold;">✕ 取り消す</button>
+                </div>
+                <img id="preview-img" style="max-height:160px; border-radius:4px; display:none; border:1px solid #ddd;">
                 <div id="preview-pdf" style="display:none; font-size:0.85rem; color:#b91c1c; font-weight:bold;">
                     📄 選択中: <span id="preview-pdf-name"></span>
                 </div>
@@ -395,7 +434,6 @@
             <button id="search-clear-btn" class="search-clear-btn" onclick="clearSearch()" title="検索クリア">✕</button>
         </div>
 
-        <!-- ★ わたしの未読フィルタータブ -->
         <div class="filter-tab-container">
             <button id="filter-all-btn" class="filter-tab-btn active" onclick="setPostFilter('all')">
                 📋 すべて表示 (<span id="total-posts-count">0</span>)
@@ -416,10 +454,10 @@
         let isCurrentUserAdmin = false;
         let cachedPosts = [];
         let cachedReadPostIds = [];
-        let commentFiles = {};
-        let currentFilter = 'all'; // 'all' または 'unread'
+        let selectedPostFile = null; // お知らせ投稿用の選択ファイル
+        let commentFiles = {};       // コメント用の選択ファイル
+        let currentFilter = 'all';
 
-        // ★ 月曜日始まりの曜日定義（label: 表示名, dayNum: 0〜6の曜日番号）
         const dayList = [
             { label: '月', dayNum: '1' },
             { label: '火', dayNum: '2' },
@@ -491,7 +529,6 @@
             }
         }
 
-        // フィルタータブ切り替え
         function setPostFilter(type) {
             currentFilter = type;
             const allBtn = document.getElementById('filter-all-btn');
@@ -508,7 +545,6 @@
             handleSearch();
         }
 
-        // 未読・全体件数カウント更新
         function updateFilterCounts() {
             const totalCount = cachedPosts.length;
             const myUnreadCount = cachedPosts.filter(p => !cachedReadPostIds.includes(p.id)).length;
@@ -552,7 +588,6 @@
                     const isSelf = (u.line_user_id === myLineUserId);
                     const workDays = (u.work_days || '0,1,2,3,4,5,6').split(',');
 
-                    // ★ 月曜日始まりでバッジを生成
                     const daysHtml = dayList.map(item => {
                         const isWorking = workDays.includes(item.dayNum);
                         return `
@@ -695,20 +730,27 @@
             }
         }
 
-        function previewSelectedFile() {
-            const fileInput = document.getElementById('new-file');
-            const file = fileInput.files[0];
+        // 📷 お知らせ投稿用：カメラまたはファイル選択を起動
+        function triggerPostFileSelect(type) {
+            if (type === 'camera') {
+                document.getElementById('new-file-camera').click();
+            } else {
+                document.getElementById('new-file-library').click();
+            }
+        }
+
+        // お知らせ投稿用：ファイルが選択された時の処理
+        function handlePostFileChange(input) {
+            const file = input.files[0];
             const previewArea = document.getElementById('file-preview-area');
             const previewImg = document.getElementById('preview-img');
             const previewPdf = document.getElementById('preview-pdf');
             const previewPdfName = document.getElementById('preview-pdf-name');
             const qualityContainer = document.getElementById('quality-option-container');
 
-            if (!file) {
-                previewArea.style.display = 'none';
-                return;
-            }
+            if (!file) return;
 
+            selectedPostFile = file;
             previewArea.style.display = 'block';
 
             if (file.type.startsWith('image/')) {
@@ -728,6 +770,24 @@
             }
         }
 
+        // お知らせ投稿用：添付ファイルのクリア
+        function clearPostFile() {
+            selectedPostFile = null;
+            document.getElementById('new-file-camera').value = '';
+            document.getElementById('new-file-library').value = '';
+            document.getElementById('file-preview-area').style.display = 'none';
+        }
+
+        // 📷 コメント用：カメラまたはファイル選択を起動
+        function triggerCommentFileSelect(postId, type) {
+            if (type === 'camera') {
+                document.getElementById(`comment-file-camera-${postId}`).click();
+            } else {
+                document.getElementById(`comment-file-library-${postId}`).click();
+            }
+        }
+
+        // コメント用：ファイルが選択された時の処理
         function handleCommentFileChange(postId, input) {
             const file = input.files[0];
             const previewBox = document.getElementById(`comment-preview-box-${postId}`);
@@ -736,11 +796,7 @@
             const previewPdfName = document.getElementById(`comment-preview-pdf-name-${postId}`);
             const qualityContainer = document.getElementById(`comment-quality-container-${postId}`);
 
-            if (!file) {
-                delete commentFiles[postId];
-                if (previewBox) previewBox.style.display = 'none';
-                return;
-            }
+            if (!file) return;
 
             commentFiles[postId] = file;
             if (previewBox) previewBox.style.display = 'block';
@@ -764,8 +820,10 @@
 
         function clearCommentFile(postId) {
             delete commentFiles[postId];
-            const input = document.getElementById(`comment-file-input-${postId}`);
-            if (input) input.value = '';
+            const camInput = document.getElementById(`comment-file-camera-${postId}`);
+            const libInput = document.getElementById(`comment-file-library-${postId}`);
+            if (camInput) camInput.value = '';
+            if (libInput) libInput.value = '';
             const previewBox = document.getElementById(`comment-preview-box-${postId}`);
             if (previewBox) previewBox.style.display = 'none';
         }
@@ -825,13 +883,11 @@
                 return;
             }
 
-            // 1. フィルター（すべて ⇄ 未読）の適用
             let baseList = cachedPosts;
             if (currentFilter === 'unread') {
                 baseList = cachedPosts.filter(post => !cachedReadPostIds.includes(post.id));
             }
 
-            // 2. キーワード検索の適用
             if (!query) {
                 resultInfo.style.display = 'none';
                 renderPosts(baseList);
@@ -912,7 +968,6 @@
                 const readersText = readers.length > 0 ? readers.join(', ') : 'まだいません';
                 const unreadersText = unreaders.length > 0 ? unreaders.join(', ') : 'なし（全員既読！）';
                 
-                // ★ 投稿時点のスナップショット人数を使用
                 const totalUsers = post.totalUsers || readers.length;
                 const readRate = post.readRate !== undefined ? post.readRate : 0;
 
@@ -1040,12 +1095,17 @@
                                     <button id="comment-submit-btn-${post.id}" onclick="addComment(${post.id})" style="padding: 8px 14px; background: #0284c7; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 0.85rem; cursor: pointer; white-space:nowrap;">送信</button>
                                 </div>
 
-                                <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between;">
-                                    <label for="comment-file-input-${post.id}" style="font-size: 0.8rem; color: #0284c7; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
-                                        📎 写真・PDFを添付
-                                    </label>
-                                    <input type="file" id="comment-file-input-${post.id}" accept="image/*,application/pdf" style="display: none;" onchange="handleCommentFileChange(${post.id}, this)">
+                                <!-- コメント用 カメラ撮影 / ファイル選択ボタン -->
+                                <div style="margin-top: 8px; display: flex; gap: 8px;">
+                                    <button type="button" class="upload-btn" style="padding:5px 8px; font-size:0.75rem;" onclick="triggerCommentFileSelect(${post.id}, 'camera')">
+                                        📷 写真を撮影
+                                    </button>
+                                    <button type="button" class="upload-btn" style="padding:5px 8px; font-size:0.75rem;" onclick="triggerCommentFileSelect(${post.id}, 'library')">
+                                        📁 写真・PDFを選択
+                                    </button>
                                 </div>
+                                <input type="file" id="comment-file-camera-${post.id}" accept="image/*" capture="environment" style="display: none;" onchange="handleCommentFileChange(${post.id}, this)">
+                                <input type="file" id="comment-file-library-${post.id}" accept="image/*,application/pdf" style="display: none;" onchange="handleCommentFileChange(${post.id}, this)">
 
                                 <div id="comment-preview-box-${post.id}" style="display: none; margin-top: 8px; padding: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px;">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
@@ -1265,14 +1325,13 @@
         async function createPost() {
             const titleInput = document.getElementById('new-title');
             const bodyInput = document.getElementById('new-body');
-            const fileInput = document.getElementById('new-file');
             const submitBtn = document.getElementById('submit-post-btn');
             const keepOriginal = document.getElementById('keep-original-quality').checked;
             
             const title = titleInput.value.trim();
             const body = bodyInput.value.trim();
             const notifyType = document.querySelector('input[name="notify_type"]:checked').value;
-            const file = fileInput.files[0];
+            const file = selectedPostFile;
 
             if (!title || !body) return alert('タイトルと本文を入力してください');
 
@@ -1336,8 +1395,7 @@
                     alert('投稿しました！');
                     titleInput.value = '';
                     bodyInput.value = '';
-                    fileInput.value = '';
-                    document.getElementById('file-preview-area').style.display = 'none';
+                    clearPostFile();
                     loadPosts();
                 } else {
                     const errData = await response.json();
